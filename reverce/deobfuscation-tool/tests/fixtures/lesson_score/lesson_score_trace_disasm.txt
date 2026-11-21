@@ -1,0 +1,199 @@
+
+/home/kali/Downloads/demo/build/artifacts/libflatten_fla_android.so:	file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+00000000000015fc <lesson_score>:
+    15fc:      	sub	sp, sp, #32
+    1600:      	str	w0, [sp, #20]
+    1604:      	ldr	w8, [sp, #20]
+    1608:      	str	w8, [sp, #16]
+    160c:      	ldr	w8, [sp, #16]
+    1610:      	str	w8, [sp, #28]
+    1614:      	mov	w8, #31940
+    1618:      	movk	w8, #12551, lsl #16
+    161c:      	str	w8, [sp, #4]
+    1620:      	ldr	w8, [sp, #4]
+    1624:      	mov	w9, #38118
+    1628:      	movk	w9, #33276, lsl #16
+    162c:      	subs	w9, w8, w9
+    1630:      	str	w8, [sp]
+    1634:      	b.eq	0x1804 <lesson_score+0x208>
+    1638:      	b	0x163c <lesson_score+0x40>
+    163c:      	mov	w8, #62381
+    1640:      	movk	w8, #41908, lsl #16
+    1644:      	ldr	w9, [sp]
+    1648:      	subs	w8, w9, w8
+    164c:      	b.eq	0x188c <lesson_score+0x290>
+    1650:      	b	0x1654 <lesson_score+0x58>
+    1654:      	mov	w8, #5530
+    1658:      	movk	w8, #52233, lsl #16
+    165c:      	ldr	w9, [sp]
+    1660:      	subs	w8, w9, w8
+    1664:      	b.eq	0x18b0 <lesson_score+0x2b4>
+    1668:      	b	0x166c <lesson_score+0x70>
+    166c:      	mov	w8, #60976
+    1670:      	movk	w8, #56789, lsl #16
+    1674:      	ldr	w9, [sp]
+    1678:      	subs	w8, w9, w8
+    167c:      	b.eq	0x1870 <lesson_score+0x274>
+    1680:      	b	0x1684 <lesson_score+0x88>
+    1684:      	mov	w8, #32004
+    1688:      	movk	w8, #59107, lsl #16
+    168c:      	ldr	w9, [sp]
+    1690:      	subs	w8, w9, w8
+    1694:      	b.eq	0x182c <lesson_score+0x230>
+    1698:      	b	0x169c <lesson_score+0xa0>
+    169c:      	mov	w8, #4619
+    16a0:      	movk	w8, #61960, lsl #16
+    16a4:      	ldr	w9, [sp]
+    16a8:      	subs	w8, w9, w8
+    16ac:      	b.eq	0x1854 <lesson_score+0x258>
+    16b0:      	b	0x16b4 <lesson_score+0xb8>
+    16b4:      	mov	w8, #48466
+    16b8:      	movk	w8, #189, lsl #16
+    16bc:      	ldr	w9, [sp]
+    16c0:      	subs	w8, w9, w8
+    16c4:      	b.eq	0x18ec <lesson_score+0x2f0>
+    16c8:      	b	0x16cc <lesson_score+0xd0>
+    16cc:      	mov	w8, #14836
+    16d0:      	movk	w8, #330, lsl #16
+    16d4:      	ldr	w9, [sp]
+    16d8:      	subs	w8, w9, w8
+    16dc:      	b.eq	0x17a4 <lesson_score+0x1a8>
+    16e0:      	b	0x16e4 <lesson_score+0xe8>
+    16e4:      	mov	w8, #57509
+    16e8:      	movk	w8, #4946, lsl #16
+    16ec:      	ldr	w9, [sp]
+    16f0:      	subs	w8, w9, w8
+    16f4:      	b.eq	0x17e0 <lesson_score+0x1e4>
+    16f8:      	b	0x16fc <lesson_score+0x100>
+    16fc:      	mov	w8, #31940
+    1700:      	movk	w8, #12551, lsl #16
+    1704:      	ldr	w9, [sp]
+    1708:      	subs	w8, w9, w8
+    170c:      	b.eq	0x1760 <lesson_score+0x164>
+    1710:      	b	0x1714 <lesson_score+0x118>
+    1714:      	mov	w8, #46355
+    1718:      	movk	w8, #20219, lsl #16
+    171c:      	ldr	w9, [sp]
+    1720:      	subs	w8, w9, w8
+    1724:      	b.eq	0x18d0 <lesson_score+0x2d4>
+    1728:      	b	0x172c <lesson_score+0x130>
+    172c:      	mov	w8, #11602
+    1730:      	movk	w8, #24436, lsl #16
+    1734:      	ldr	w9, [sp]
+    1738:      	subs	w8, w9, w8
+    173c:      	b.eq	0x1784 <lesson_score+0x188>
+    1740:      	b	0x1744 <lesson_score+0x148>
+    1744:      	mov	w8, #7584
+    1748:      	movk	w8, #32272, lsl #16
+    174c:      	ldr	w9, [sp]
+    1750:      	subs	w8, w9, w8
+    1754:      	b.eq	0x17bc <lesson_score+0x1c0>
+    1758:      	b	0x175c <lesson_score+0x160>
+    175c:      	b	0x18f8 <lesson_score+0x2fc>
+    1760:      	ldr	w8, [sp, #28]
+    1764:      	mov	w9, #11602
+    1768:      	movk	w9, #24436, lsl #16
+    176c:      	mov	w10, #14836
+    1770:      	movk	w10, #330, lsl #16
+    1774:      	cmp	w8, #0
+    1778:      	csel	w8, w9, w10, lt
+    177c:      	str	w8, [sp, #4]
+    1780:      	b	0x18f8 <lesson_score+0x2fc>
+    1784:      	ldr	w8, [sp, #16]
+    1788:      	mov	w9, wzr
+    178c:      	subs	w8, w9, w8
+    1790:      	str	w8, [sp, #16]
+    1794:      	mov	w8, #14836
+    1798:      	movk	w8, #330, lsl #16
+    179c:      	str	w8, [sp, #4]
+    17a0:      	b	0x18f8 <lesson_score+0x2fc>
+    17a4:      	str	wzr, [sp, #12]
+    17a8:      	str	wzr, [sp, #8]
+    17ac:      	mov	w8, #7584
+    17b0:      	movk	w8, #32272, lsl #16
+    17b4:      	str	w8, [sp, #4]
+    17b8:      	b	0x18f8 <lesson_score+0x2fc>
+    17bc:      	ldr	w8, [sp, #8]
+    17c0:      	mov	w9, #57509
+    17c4:      	movk	w9, #4946, lsl #16
+    17c8:      	mov	w10, #62381
+    17cc:      	movk	w10, #41908, lsl #16
+    17d0:      	cmp	w8, #4
+    17d4:      	csel	w8, w9, w10, lt
+    17d8:      	str	w8, [sp, #4]
+    17dc:      	b	0x18f8 <lesson_score+0x2fc>
+    17e0:      	ldr	w8, [sp, #16]
+    17e4:      	mov	w9, #32004
+    17e8:      	movk	w9, #59107, lsl #16
+    17ec:      	mov	w10, #38118
+    17f0:      	movk	w10, #33276, lsl #16
+    17f4:      	tst	w8, #0x1
+    17f8:      	csel	w8, w10, w9, eq
+    17fc:      	str	w8, [sp, #4]
+    1800:      	b	0x18f8 <lesson_score+0x2fc>
+    1804:      	ldr	w8, [sp, #16]
+    1808:      	ldr	w9, [sp, #8]
+    180c:      	add	w8, w8, w9
+    1810:      	ldr	w9, [sp, #12]
+    1814:      	add	w8, w9, w8
+    1818:      	str	w8, [sp, #12]
+    181c:      	mov	w8, #4619
+    1820:      	movk	w8, #61960, lsl #16
+    1824:      	str	w8, [sp, #4]
+    1828:      	b	0x18f8 <lesson_score+0x2fc>
+    182c:      	ldr	w8, [sp, #16]
+    1830:      	ldr	w9, [sp, #8]
+    1834:      	subs	w8, w8, w9
+    1838:      	ldr	w9, [sp, #12]
+    183c:      	add	w8, w9, w8
+    1840:      	str	w8, [sp, #12]
+    1844:      	mov	w8, #4619
+    1848:      	movk	w8, #61960, lsl #16
+    184c:      	str	w8, [sp, #4]
+    1850:      	b	0x18f8 <lesson_score+0x2fc>
+    1854:      	ldr	w8, [sp, #16]
+    1858:      	asr	w8, w8, #1
+    185c:      	str	w8, [sp, #16]
+    1860:      	mov	w8, #60976
+    1864:      	movk	w8, #56789, lsl #16
+    1868:      	str	w8, [sp, #4]
+    186c:      	b	0x18f8 <lesson_score+0x2fc>
+    1870:      	ldr	w8, [sp, #8]
+    1874:      	add	w8, w8, #1
+    1878:      	str	w8, [sp, #8]
+    187c:      	mov	w8, #7584
+    1880:      	movk	w8, #32272, lsl #16
+    1884:      	str	w8, [sp, #4]
+    1888:      	b	0x18f8 <lesson_score+0x2fc>
+    188c:      	ldr	w8, [sp, #12]
+    1890:      	mov	w9, #46355
+    1894:      	movk	w9, #20219, lsl #16
+    1898:      	mov	w10, #5530
+    189c:      	movk	w10, #52233, lsl #16
+    18a0:      	cmp	w8, #20
+    18a4:      	csel	w8, w10, w9, gt
+    18a8:      	str	w8, [sp, #4]
+    18ac:      	b	0x18f8 <lesson_score+0x2fc>
+    18b0:      	ldr	w8, [sp, #12]
+    18b4:      	mov	w9, #90
+    18b8:      	eor	w8, w8, w9
+    18bc:      	str	w8, [sp, #24]
+    18c0:      	mov	w8, #48466
+    18c4:      	movk	w8, #189, lsl #16
+    18c8:      	str	w8, [sp, #4]
+    18cc:      	b	0x18f8 <lesson_score+0x2fc>
+    18d0:      	ldr	w8, [sp, #12]
+    18d4:      	add	w8, w8, #7
+    18d8:      	str	w8, [sp, #24]
+    18dc:      	mov	w8, #48466
+    18e0:      	movk	w8, #189, lsl #16
+    18e4:      	str	w8, [sp, #4]
+    18e8:      	b	0x18f8 <lesson_score+0x2fc>
+    18ec:      	ldr	w0, [sp, #24]
+    18f0:      	add	sp, sp, #32
+    18f4:      	ret
+    18f8:      	b	0x1620 <lesson_score+0x24>

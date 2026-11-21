@@ -1,0 +1,4 @@
+[model]
+provider = "codex_exec"
+name = "gpt-6-sol"
+reasoning_effort = "high"
