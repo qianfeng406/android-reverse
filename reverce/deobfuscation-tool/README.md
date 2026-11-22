@@ -2,7 +2,7 @@
 
 本目录用于开发基于静态分析与运行时 trace 的控制流反混淆工具。首个验证对象是 `demo/lesson_score` 的 ARM64 OLLVM 平坦化样本；后续通过策略扩展支持间接跳转、多分发器和混合块。
 
-当前 D0–D2 已实现。阶段接口和数据契约见 [开发文档](docs/DEVELOPMENT.md)，后续里程碑见 [开发计划](docs/ROADMAP.md)，实际命令和适用范围见 [使用说明](docs/USAGE.md)。原始实验脚本仍位于本机的 `../demo/`；可复现的 demo 样本已收录在 `tests/fixtures/lesson_score/`。
+当前 D0–D2 已实现，D3/D4 的联合方案见 [详细设计](docs/D3_D4_DESIGN.md)。阶段接口和数据契约见 [开发文档](docs/DEVELOPMENT.md)，后续里程碑见 [开发计划](docs/ROADMAP.md)，实际命令和适用范围见 [使用说明](docs/USAGE.md)。原始实验脚本仍位于本机的 `../demo/`；可复现的 demo 样本已收录在 `tests/fixtures/lesson_score/`。
 
 默认大模型配置见 [config/default.toml](config/default.toml)：可选 Codex CLI 调用使用 `gpt-6-sol`，推理强度为 `high`。D2 已加入只读在线提案接口；模型提案不直接改变结构结论。
 

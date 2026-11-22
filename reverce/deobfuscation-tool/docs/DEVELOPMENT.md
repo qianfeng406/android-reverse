@@ -10,21 +10,7 @@
 
 地址使用 `binary_id + module_offset`；`binary_id` 来自样本哈希。一次采集使用 `run_id + thread_id + invocation_id` 区分调用，事件使用单调递增的 `event_index` 排序。所有阶段保留来源事件或指令地址，不把推断覆盖到原始证据上。
 
-一条经阶段 4 验证的转移记录示意；字段结构从第一版开始固定，具体状态取决于证据：
-
-```json
-{
-  "source": "0x17e0",
-  "guard": "(w8 & 1) != 0",
-  "state_expression": "0xe6e37d04",
-  "observed_state": "0xe6e37d04",
-  "target": "0x182c",
-  "evidence": {"runs": [4], "instructions": ["0x17f4", "0x17f8", "0x17fc"]},
-  "status": "observed_and_static_proven"
-}
-```
-
-`status` 至少区分 `observed`、`static_proven`、`observed_and_static_proven`、`unresolved`。动态观察只证明该次输入走过此边；静态证明需包含路径条件和状态分发推导。证据不足的规则可以交接给下一轮采集，但不能进入自动修复。
+D3 的单次观测与 D4 的转移规则使用不同但衔接的统一模板；字段、位宽表达式及 JSON 示例以 [D3/D4 详细设计](D3_D4_DESIGN.md) 为准。规则状态区分 `observed`、`static_proven`、`observed_and_static_proven`、`unresolved` 和 `contradicted`。动态观察只证明该次输入走过此边；静态证明需包含路径条件和状态分发推导。证据不足的规则可以交接给下一轮采集，但不能进入自动修复。
 
 ## 阶段及交接内容
 
@@ -47,6 +33,8 @@
 当前 D2 首版在 `discover.py` 实现可选的原子证据规则。它以多来源汇入点为候选，要求多个前驱块写同一状态槽，并在可达分发区域读该槽或同块复制出的别名、执行比较分流；还要求 trace 中该候选重复出现。输出 `structure_candidates`、观察图和 `probe_plan`；后者目前只覆盖同一块内条件比较、条件选择和状态写入。所有候选保留 `hypothesis` 状态，不等同于已证明业务边。`--use-model` 保存独立只读提案，并可通过 `rule:<规则名>` 选择可选证据规则；核心规则不可由模型关闭，结构结果仍由规则引擎生成。
 
 ### 阶段 2 到阶段 4
+
+D3 与 D4 的联合数据契约、采集配对方法、表达式推导和验收条件见 [D3/D4 详细设计](D3_D4_DESIGN.md)。下文保留总体原则；详细设计目前尚未实现。
 
 `probe_plan` 由候选结构和反向切片生成。固定回跳的样本从分发器所读状态反查写入，再追条件选择；`BR Xn` 从目标寄存器反查定义；调用返回值参与目标计算时追调用参数、返回寄存器及后续运算。策略无法解释切片时输出未解决项，可由大模型提出新策略，再由工具校验。
 
