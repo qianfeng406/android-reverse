@@ -30,7 +30,9 @@ D3 的单次观测与 D4 的转移规则使用不同但衔接的统一模板；�
 
 阶段 2 先用图特征提出候选，再由静态数据流核查：回边和多来源汇入、反复读取同一状态位置、比较或间接地址计算、其他块写入该状态位置。频率不能单独证明分发器身份；真实循环也可能反复执行。混合块按指令作用区分计算与路由，不能整块贴单一标签。
 
-当前 D2 首版在 `discover.py` 实现可选的原子证据规则。它以多来源汇入点为候选，要求多个前驱块写同一状态槽，并在可达分发区域读该槽或同块复制出的别名、执行比较分流；还要求 trace 中该候选重复出现。输出 `structure_candidates`、观察图和 `probe_plan`；后者目前只覆盖同一块内条件比较、条件选择和状态写入。所有候选保留 `hypothesis` 状态，不等同于已证明业务边。`--use-model` 保存独立只读提案，并可通过 `rule:<规则名>` 选择可选证据规则；核心规则不可由模型关闭，结构结果仍由规则引擎生成。
+当前 D2 首版在 `DISCOVERY_STRATEGIES` 登记 `stack_comparison_chain_v1`，内部实现可选的原子证据规则。它以多来源汇入点为候选，要求多个前驱块写同一状态槽，并在可达分发区域读该槽或同块复制出的别名、执行比较分流；还要求 trace 中该候选重复出现。输出 `structure_candidates`、观察图和 `probe_plan`；后者目前只覆盖同一块内条件比较、条件选择和状态写入。所有候选保留 `hypothesis` 状态，不等同于已证明业务边。`--use-model` 保存独立只读提案，并可通过 `rule:<规则名>` 选择可选证据规则；核心规则不可由模型关闭，结构结果仍由规则引擎生成。
+
+D3 的计划编译通过 `PROBE_PLANNERS` 登记采集策略；当前 `stack_slot_v1` 负责栈槽读写，后续寄存器状态和间接目标可加入新规划器。D4 通过 `INFERENCE_STRATEGIES` 选择相应推导函数；未知策略明确输出未解。计划中的 `unsupported` 是按来源块列出的明确失败事实，不能被 D4 解释为成功采集。D4 符号解释器中无法解释的条件节点会阻止静态证明；分发读取观测若与写入值矛盾，相关规则标为 `contradicted`。规则还保存静态指令、CFG、D2 结构与 D3 观测的输入哈希，阶段闸门据此检测过期结果。
 
 ### 阶段 2 到阶段 4
 
@@ -63,7 +65,7 @@ D3 与 D4 的联合数据契约、采集配对方法、表达式推导和验收�
 
 ## 大模型接入接口
 
-模型是可选的**提案提供者**，不直接修改 trace、CFG 或二进制。工具核心只依赖 `ModelAdapter.propose(request) -> proposal`；没有模型时可使用规则库或已保存的提案继续运行。阶段 2 使用 `structure_hypothesis` 和 `candidate_review`，阶段 3–4 遇到未解切片时使用 `probe_or_strategy_hypothesis`，阶段 5–6 使用 `patch_review` 和 `failure_diagnosis`。所有请求只传相关图摘要、指令切片及证据引用，不把整份原始日志直接放进上下文。
+模型是可选的**提案提供者**，不直接修改 trace、CFG 或二进制。D2 的 `ModelAdapter.propose(request) -> proposal` 提出结构候选；D4 的 `review-rules` 针对单条规则提出疑点和补采建议，单独保存审查结果。两者都可离线重放，且不改写证明状态。D5–D6 的模型复核仍在计划中。所有请求只传相关图摘要、指令切片及有限观测，不把整份原始日志直接放进上下文。
 
 请求与响应都使用带版本号的 JSON Schema。最小契约：
 
@@ -90,9 +92,9 @@ D3 与 D4 的联合数据契约、采集配对方法、表达式推导和验收�
 
 模型提案先过 Schema、地址范围和引用存在性校验，再由图算法、数据流分析和动态记录核查。模型给出的“置信度”不作为通过条件；校验失败保存反例和原因，交给下一轮提案或标为 `unresolved`。每次调用保存模型适配器、模型标识、请求摘要、提案和验证结果；相同请求可用保存的提案重放回归测试。
 
-首版实现三个适配器：`replay` 读取固定提案，用于离线测试；`codex_exec` 调用本机 Codex CLI 的非交互模式，在只读工作区内输出符合 Schema 的 JSON；`responses_api` 作为后续运行时后端。默认配置在 [`config/default.toml`](../config/default.toml)：模型 `gpt-6-sol`，推理强度 `high`。两个在线适配器读取相同的模型配置；CLI 映射为 `-m` 与 `model_reasoning_effort`，Responses API 映射为 `model` 与 `reasoning.effort`。`replay` 使用已保存的提案，不发起模型调用。
+当前实现 `replay` 和 `codex_exec`：前者读取固定提案，用于离线测试；后者调用本机 Codex CLI 的非交互模式，在只读工作区输出符合 Schema 的 JSON。`responses_api` 是后续运行时后端计划，尚未实现。默认配置在 [`config/default.toml`](../config/default.toml)：模型 `gpt-6-sol`，推理强度 `high`。`replay` 不发起模型调用。
 
-`codex_exec` 的进程退出码、超时、拒绝、非 JSON 输出和 Schema 不匹配都作为明确错误处理。`responses_api` 使用结构化输出和独立配置的 API 凭据；不假设当前 Codex 对话或桌面登录会自动变成 API 凭据。未来需要持久会话和流式工具交互时，可在相同 `ModelAdapter` 后增加 Codex SDK 或 app-server 适配器。
+`codex_exec` 的进程退出码、超时、拒绝、非 JSON 输出和 Schema 不匹配都作为明确错误处理。未来的 `responses_api` 需要独立配置 API 凭据；不假设当前 Codex 对话或桌面登录会自动变成 API 凭据。需要持久会话和流式工具交互时，可增加 Codex SDK 或 app-server 适配器。
 
 `codex_exec` 的调用形态如下；实际命令由适配器以参数数组启动，提案 Schema 和提示词由工具生成。它启动一次独立的 Codex 任务，不继承当前聊天上下文。
 

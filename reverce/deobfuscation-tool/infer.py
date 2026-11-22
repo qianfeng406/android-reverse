@@ -1,6 +1,7 @@
 """Conservative ARM64 state-transition inference for comparison-chain dispatchers."""
 from collections import defaultdict
 import re
+from probe import digest
 
 
 def const(n, width=32):
@@ -34,6 +35,31 @@ def inverse(guard):
     return {**guard, 'op': {'eq':'ne', 'ne':'eq', 'slt':'sge', 'sge':'slt', 'sgt':'sle', 'sle':'sgt', 'ult':'uge', 'uge':'ult', 'ugt':'ule', 'ule':'ugt'}[guard['op']]}
 
 
+def proof_ready(ast):
+    if not isinstance(ast, dict): return False
+    op, width = ast.get('op'), ast.get('width')
+    if width not in (1,8,16,32,64): return False
+    if op == 'const':
+        try: return 0 <= int(ast['hex'],16) < 1 << width
+        except (KeyError, TypeError, ValueError): return False
+    if op == 'reg': return isinstance(ast.get('name'),str) and re.fullmatch(r'[wx]\d+',ast['name']) is not None
+    if op == 'load': return isinstance(ast.get('location'),str) and ast['location'] != ''
+    arity = {'and': 2, 'eq': 2, 'ne': 2, 'slt': 2, 'sge': 2,
+             'sgt': 2, 'sle': 2, 'ult': 2, 'uge': 2, 'ugt': 2, 'ule': 2}
+    args = ast.get('args')
+    if op not in arity or not isinstance(args,list) or len(args) != arity[op] or not all(proof_ready(x) for x in args):
+        return False
+    return args[0]['width'] == args[1]['width'] and width == (args[0]['width'] if op == 'and' else 1)
+
+
+def router_matches(read, observed):
+    try:
+        value = read['value']
+        return value['width'] == observed['width'] and int(value['hex'],16) == int(observed['hex'],16)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def val(ast, inputs=None):
     if ast is None: return None
     op = ast['op']; width = ast['width']
@@ -65,18 +91,24 @@ def execute(group, initial_mem=None):
         if s.startswith('#'): return const(number(s))
         if s in ('wzr', 'xzr'): return const(0, 64 if s == 'xzr' else 32)
         return regs.get(s, {'op':'reg', 'width':64 if s.startswith('x') else 32, 'name':s})
+    def put(name, value):
+        regs[name] = value
+        if re.fullmatch(r'[wx]\d+',name):
+            peer = ('x' if name.startswith('w') else 'w') + name[1:]
+            width = 64 if peer.startswith('x') else 32
+            regs[peer] = const(int(value['hex'],16),width) if value.get('op') == 'const' else {'op':'unknown','width':width}
     branch = None
     for ins in group:
         op = ins['mnemonic'].lower(); p = parts(ins['operands']); site = ins['module_offset']
-        if op == 'mov': regs[p[0]] = get(p[1])
+        if op == 'mov': put(p[0],const(number(p[1]),64 if p[0].startswith('x') else 32) if p[1].startswith('#') else get(p[1]))
         elif op == 'movk':
             old = val(get(p[0])); shift = number(p[2].split()[-1]) if len(p) > 2 else 0
             if old is None: raise ValueError('movk_unknown_input:' + site)
-            regs[p[0]] = const((old & ~(0xffff << shift)) | (number(p[1]) << shift), get(p[0])['width'])
+            put(p[0],const((old & ~(0xffff << shift)) | (number(p[1]) << shift), get(p[0])['width']))
         elif op in ('ldr','ldur'):
             loc = slot(p[1]); width = 64 if p[0].startswith('x') else 32
             if loc is None: raise ValueError('unsupported_load:' + site)
-            regs[p[0]] = mem.get(loc, {'op':'load','width':width,'location':loc})
+            put(p[0],mem.get(loc, {'op':'load','width':width,'location':loc}))
         elif op in ('str','stur'):
             loc = slot(p[1])
             if loc is None: raise ValueError('unsupported_store:' + site)
@@ -85,13 +117,13 @@ def execute(group, initial_mem=None):
             aidx = 1 if op == 'subs' else 0
             a, b = get(p[aidx]), get(p[aidx+1]); last_input = (p[aidx], a)
             flags = ({'op':'and','width':a['width'],'args':[a,b]}, const(0,a['width'])) if op == 'tst' else (a,b)
-            if op == 'subs': regs[p[0]] = {'op':'unknown','width':a['width']}
+            if op == 'subs': put(p[0],{'op':'unknown','width':a['width']})
         elif op == 'csel':
             g = guard_for(p[3], flags)
-            regs[p[0]] = {'op':'ite','width':get(p[1])['width'],'args':[g,get(p[1]),get(p[2])], '_input':last_input}
+            put(p[0],{'op':'ite','width':get(p[1])['width'],'args':[g,get(p[1]),get(p[2])], '_input':last_input})
         elif op in ('add','sub','eor','asr'):
             # Their values may feed business computation, but cannot prove a state.
-            regs[p[0]] = {'op':'unknown','width':64 if p[0].startswith('x') else 32}
+            put(p[0],{'op':'unknown','width':64 if p[0].startswith('x') else 32})
         elif op == 'b': branch = (None, hex(int(p[0].split()[0].lstrip('#'), 16)))
         elif op.startswith('b.'):
             branch = (guard_for(op[2:], flags), hex(int(p[0].split()[0].lstrip('#'), 16)))
@@ -99,9 +131,12 @@ def execute(group, initial_mem=None):
     return mem, write, branch
 
 
-def infer_rules(instructions, cfg, structure, observations, binary_id):
+def infer_stack_slot(instructions, cfg, structure, observations, binary_id):
     candidate = next((c for c in structure.get('candidates', []) if c.get('hub') == structure.get('selected_candidate')), None)
-    metadata = {'function': observations.get('function'), 'structure_id': observations.get('structure_id'), 'plan_id': observations.get('plan_id'), 'binary_id': binary_id}
+    metadata = {'function': observations.get('function'), 'structure_id': observations.get('structure_id'), 'plan_id': observations.get('plan_id'), 'binary_id': binary_id,
+                'strategy':observations.get('strategy','stack_slot_v1'),
+                'input_hashes':{'instruction_table':digest(instructions),'static_cfg':digest(cfg),
+                                'structure_candidates':digest(structure),'transition_observations':digest(observations)}}
     failures, result = [], []
     if not candidate:
         return ({**metadata,'rules':[]}, {**metadata,'unresolved':[{'reason':'no_selected_candidate'}]})
@@ -110,11 +145,13 @@ def infer_rules(instructions, cfg, structure, observations, binary_id):
     region = set(candidate['dispatcher_blocks']); state_slot = canonical_slot(candidate['state_slot'])
     records = defaultdict(list)
     for r in observations.get('records', []): records[(r.get('origin') or {}).get('source_block')].append(r)
+    unsupported_sources = {x['source_block']:x['reason'] for x in observations.get('plan_unsupported', [])
+                           if isinstance(x,dict) and x.get('reason') == 'state_write_count'}
     def target(state, start=None):
-        mem = {state_slot:state}; node = start or candidate['hub']; seen = set(); refs = []
+        mem = {state_slot:state}; node = start or candidate['hub']; seen = set(); refs = []; path = []
         while node in region:
             if node in seen or node not in blocks: raise ValueError('dispatcher_cycle_or_missing_block')
-            seen.add(node); group = groups[node]; refs.extend('insn:'+i['module_offset'] for i in group)
+            seen.add(node); path.append(node); group = groups[node]; refs.extend('insn:'+i['module_offset'] for i in group)
             mem, _, branch = execute(group, mem)
             if not branch: raise ValueError('dispatcher_missing_branch')
             cond, dest = branch
@@ -126,7 +163,7 @@ def infer_rules(instructions, cfg, structure, observations, binary_id):
                 if len(falls) != 1: raise ValueError('dispatcher_missing_fallthrough')
                 node = dest if decision else falls[0]
         if node not in candidate.get('execution_entries', []): raise ValueError('dispatcher_unmatched_target')
-        return node, refs
+        return node, refs, path + [node]
     entry = cfg['blocks'][0]['start'] if cfg['blocks'] else None
     sources = list(candidate['state_writers'])
     if entry and entry not in sources and entry not in region:
@@ -135,6 +172,7 @@ def infer_rules(instructions, cfg, structure, observations, binary_id):
         refs = ['insn:'+i['module_offset'] for i in groups.get(source, [])]; alts = []; reasons = []
         try:
             if source not in blocks: raise ValueError('missing_source_block')
+            if source in unsupported_sources: raise ValueError('probe_plan_unsupported:' + unsupported_sources[source])
             _, write, branch = execute(groups[source])
             if not write or write[0] != state_slot: raise ValueError('missing_state_write')
             if source == entry and source not in candidate['state_writers']:
@@ -151,10 +189,13 @@ def infer_rules(instructions, cfg, structure, observations, binary_id):
                 input_info = state.get('_input')
             else: options = [(const(1,1), state)]; input_info = None
             for guard, value in options:
+                if not proof_ready(guard): raise ValueError('unsupported_guard_expression')
+                if val(guard) is False: continue
                 if value.get('op') != 'const': raise ValueError('nonconstant_state')
-                dest, dispatch_refs = target(value, immediate)
+                dest, dispatch_refs, route_path = target(value, immediate)
                 alts.append({'guard_ast':guard, 'state_ast':value, 'target_ast':None, 'target_block':dest,
-                             'observation_ids':[], 'instruction_refs':list(dict.fromkeys(refs+dispatch_refs)), 'status':'static_proven'})
+                             'route_path':route_path,'observation_ids':[],
+                             'instruction_refs':list(dict.fromkeys(refs+dispatch_refs)), 'status':'static_proven'})
             # Stalker can coalesce the entry fallthrough and its first CFG block.
             # Accept that block's fallthrough only when concrete state proves it,
             # the blocks are contiguous, and no intervening branch is taken.
@@ -188,16 +229,18 @@ def infer_rules(instructions, cfg, structure, observations, binary_id):
                 if not matching:
                     reasons.append({'reason':'unverified_observation_guard','observation_id':record.get('id')}); continue
                 a = matching[0]
-                if observed.get('width') != a['state_ast']['width'] or observed_int != val(a['state_ast']) or route['eventual_target'] != a['target_block']:
+                reads = route.get('dispatch_reads', [])
+                router_mismatch = any(not router_matches(read, observed) for read in reads)
+                if observed.get('width') != a['state_ast']['width'] or observed_int != val(a['state_ast']) or route['eventual_target'] != a['target_block'] or router_mismatch:
                     a['status'] = 'contradicted'; a['observation_ids'].append(record.get('id'))
-                    reasons.append({'reason':'observation_conflict','observation_id':record.get('id')})
+                    reasons.append({'reason':'dispatcher_read_mismatch' if router_mismatch else 'observation_conflict','observation_id':record.get('id')})
                 else:
                     a['observation_ids'].append(record.get('id'))
                     if a['status'] != 'contradicted': a['status'] = 'observed_and_static_proven'
         except (ValueError, KeyError, IndexError, TypeError) as error:
             alts = []; reasons.append({'reason':str(error)})
         for reason in reasons: failures.append({'source_block':source, **reason})
-        result.append({'source_block':source,'transfer_kind':'state_write','alternatives':alts,
+        result.append({'source_block':source,'transfer_kind':'state_write','state_location':state_slot,'alternatives':alts,
                        'coverage':{'normal_exits_static':len(alts),'alternatives_observed':sum(bool(a['observation_ids']) for a in alts),
                                    'guards_disjoint':True if alts else None,'guards_exhaustive':True if alts else None},
                        'evidence':refs,'unresolved':reasons})
@@ -219,9 +262,22 @@ def infer_rules(instructions, cfg, structure, observations, binary_id):
         except (ValueError, KeyError, IndexError, TypeError) as error:
             alternatives = []; reasons.append({'reason':str(error)})
         for reason in reasons: failures.append({'source_block':source, **reason})
-        result.append({'source_block':source, 'transfer_kind':'return', 'alternatives':alternatives,
+        result.append({'source_block':source, 'transfer_kind':'return', 'state_location':None,'alternatives':alternatives,
                        'coverage':{'normal_exits_static':len(alternatives), 'alternatives_observed':0,
                                    'guards_disjoint':True if alternatives else None,
                                    'guards_exhaustive':True if alternatives else None},
                        'evidence':refs, 'unresolved':reasons})
     return ({**metadata,'rules':result}, {**metadata,'unresolved':failures})
+
+
+INFERENCE_STRATEGIES = {'stack_slot_v1': infer_stack_slot}
+
+
+def infer_rules(instructions, cfg, structure, observations, binary_id):
+    strategy = observations.get('strategy','stack_slot_v1')
+    if strategy not in INFERENCE_STRATEGIES:
+        metadata = {'function':observations.get('function'),'structure_id':observations.get('structure_id'),
+                    'plan_id':observations.get('plan_id'),'binary_id':binary_id,'strategy':strategy}
+        return ({**metadata,'rules':[]},
+                {**metadata,'unresolved':[{'reason':'unsupported_inference_strategy','strategy':strategy}]})
+    return INFERENCE_STRATEGIES[strategy](instructions,cfg,structure,observations,binary_id)

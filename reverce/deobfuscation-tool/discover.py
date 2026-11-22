@@ -40,7 +40,7 @@ def to_dot(structure):
     return '\n'.join(lines) + '\n'
 
 
-def discover(instructions, cfg, trace, enabled=DEFAULT_RULES, binary_id=None):
+def discover_stack_comparison_chain(instructions, cfg, trace, enabled=DEFAULT_RULES, binary_id=None):
     enabled = tuple(enabled)
     unknown = set(enabled) - set(DEFAULT_RULES)
     if unknown:
@@ -194,4 +194,17 @@ def discover(instructions, cfg, trace, enabled=DEFAULT_RULES, binary_id=None):
                  'unresolved': ['Alias/register links and complete side effects require D3–D5 verification.'] if selected else ['No region has corroborating observed recurrence, fan-in, routing, state read and returning state writers.']}
     plan = {'candidate_hub': selected['hub'] if selected else None, 'probes': probes,
             'unresolved': ['Pair eventual routed targets in D3; immediate successor alone is insufficient.'] if selected else ['No structure candidate; collect more runs or add a mechanism strategy.']}
+    return structure, plan
+
+
+DISCOVERY_STRATEGIES = {'stack_comparison_chain_v1': discover_stack_comparison_chain}
+
+
+def discover(instructions, cfg, trace, enabled=DEFAULT_RULES, binary_id=None,
+             strategy='stack_comparison_chain_v1'):
+    if strategy not in DISCOVERY_STRATEGIES:
+        raise ValueError('unsupported D2 discovery strategy: ' + strategy)
+    structure, plan = DISCOVERY_STRATEGIES[strategy](instructions,cfg,trace,enabled,binary_id)
+    if strategy != 'stack_comparison_chain_v1':
+        structure['strategy'] = strategy
     return structure, plan

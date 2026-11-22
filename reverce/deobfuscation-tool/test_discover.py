@@ -15,6 +15,10 @@ FIXTURE = ROOT / 'tests/fixtures/lesson_score'
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_unknown_discovery_strategy_is_explicit(self):
+        with self.assertRaisesRegex(ValueError,'unsupported D2 discovery strategy'):
+            discover({}, {}, {}, strategy='register_dispatch_v1')
+
     def test_demo_end_to_end_without_addresses(self):
         with tempfile.TemporaryDirectory() as d:
             base = [sys.executable, str(ROOT/'cli.py')]

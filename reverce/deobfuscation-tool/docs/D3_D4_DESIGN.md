@@ -59,7 +59,7 @@
 
 ### 3.1 扩展并编译探针计划
 
-D2 当前的 `probe_plan` 给出四处 `condition_at` 和 `state_write_at`，但 D3 不能只采这四处。它要从 `structure_candidates.state_writers` 与 D0 指令表自动补齐其余**八个无条件状态写入块**、入口的初始状态写入、分发入口对状态的读取；若存在间接转移，再补 `BR/BLR` 前的目标寄存器。探针计划成为独立版本化产物，包含 `site`、`phase=before/after`、需读取的寄存器或内存、所归属的来源块和预计开销。模型可建议新采点，但必须经指令范围、可读取性与证据引用校验。
+D2 当前的 `probe_plan` 给出四处 `condition_at` 和 `state_write_at`，但 D3 不能只采这四处。`stack_slot_v1` 从 `structure_candidates.state_writers` 与 D0 指令表补齐其余**八个无条件状态写入块**、入口的初始状态写入和分发入口读取。它覆盖 `SP/X29` 栈槽的 `STR/STUR` 与 `LDR/LDUR`，把无匹配或同块多次写入列入 `unsupported`，不静默取一个。当前探针只支持 `phase=before`；`BR/BLR` 目标及写后读取需要后续策略。计划有内容哈希，D2 选定候选变化会使旧计划失效。
 
 首版 demo 的关键采值时刻：在 `CMP/TST` **之前**取条件输入；在 `STR [sp,#4]` **之前**取将要写入的源寄存器；若需要确认落盘值，则在写后另设读回点。仅记录 `CSEL` 结果不能解释其条件，仅记录 `CMP` 也不知道实际选择了哪个状态。
 
@@ -83,13 +83,13 @@ D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存�
 
 ### 4.2 从状态写入推到执行目标
 
-对每个来源块：从状态写入或目标寄存器反向切片，求条件及每条路径的状态/地址表达式；再从 D2 分发区域的读取点追比较、别名与跳转，建立“状态值 → 执行入口”映射。需要检查别名写入确实传递同一位宽的状态，以及比较链的有符号/无符号关系。状态映射冲突、没有匹配 case、间接目标未解，均输出 `unresolved`。D3 的每条观测用来核对表达式求值与目标，**不**承担枚举所有条件的责任。
+对每个来源块：首版在基本块内符号解释状态写入，从 D2 分发区域以具体状态值追比较和跳转，建立“状态值 → 执行入口”映射。条件 AST 内任何 `unknown` 都不能获得 `static_proven`。D3 的每条观测核对条件输入、写入值、分发读取值与到达目标，**不**承担枚举所有条件的责任。状态映射冲突、没有匹配 case、间接目标未解，均输出 `unresolved`。跨块溯源和多轮状态更新仍须新增策略。
 
 以 `0x17E0` 为例，静态切片应导出两条候选规则：`(value & 1)==0` 时写 `0x81FC94E6` 并经分发器到 `0x1804`；否则写 `0xE6E37D04` 并到 `0x182C`。D3 对某次 `value=2` 的记录只能验证前一条在该次调用成立；另一条的存在来自静态条件选择与分发表，而不是“没看到就不存在”。
 
 ### 4.3 规则产物与证明状态
 
-`transition_rules.json` 的每条来源记录包含 `source_block`、`transfer_kind`、`alternatives`、`coverage`、`evidence`、`unresolved`。每个 alternative 使用固定字段 `guard_ast`、`state_ast`（不适用为 `null`）、`target_ast`/`target_block`、`observation_ids`、`instruction_refs`、`status`。状态沿用现有 `observed`、`static_proven`、`observed_and_static_proven`、`unresolved`，另有冲突记录 `contradicted`，后者绝不能进入 D5。
+`transition_rules.json` 的每条来源记录包含 `source_block`、`transfer_kind`、`state_location`（返回规则为 `null`）、`alternatives`、`coverage`、`evidence`、`unresolved`。每个 alternative 使用 `guard_ast`、`state_ast`（不适用为 `null`）、`target_ast`/`target_block`、`route_path`、`observation_ids`、`instruction_refs`、`status`。`route_path` 从立即回跳块列到候选执行入口，是静态推导的路径，供 D5 检查途中指令；候选入口还需要语义审计。状态沿用现有 `observed`、`static_proven`、`observed_and_static_proven`、`unresolved`，另有冲突记录 `contradicted`，后者绝不能进入 D5。
 
 同样以 `0x17E0` 为例，D4 记录形状如下（`observation_ids` 仅示意）：
 
@@ -97,6 +97,7 @@ D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存�
 {
   "source_block": "0x17e0",
   "transfer_kind": "state_write",
+  "state_location": "sp+0x4",
   "alternatives": [
     {"guard_ast": {"op": "eq", "width": 1,
                     "args": [{"op": "and", "width": 32,
@@ -105,6 +106,7 @@ D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存�
                              {"op": "const", "width": 32, "hex": "0x00000000"}]},
      "state_ast": {"op": "const", "width": 32, "hex": "0x81fc94e6"},
      "target_ast": null, "target_block": "0x1804",
+     "route_path": ["0x18f8", "0x1620", "0x1804"],
      "observation_ids": ["r1/9319/1/0x17e0/3"],
      "instruction_refs": ["insn:0x17f4", "insn:0x17f8", "insn:0x17fc"],
      "status": "observed_and_static_proven"},
@@ -115,6 +117,7 @@ D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存�
                              {"op": "const", "width": 32, "hex": "0x00000000"}]},
      "state_ast": {"op": "const", "width": 32, "hex": "0xe6e37d04"},
      "target_ast": null, "target_block": "0x182c",
+     "route_path": ["0x18f8", "0x1620", "0x1638", "0x163c", "0x1650", "0x1654", "0x1668", "0x166c", "0x1680", "0x1684", "0x182c"],
      "observation_ids": [], "instruction_refs": ["insn:0x17f4", "insn:0x17f8", "insn:0x17fc"],
      "status": "static_proven"}
   ],
@@ -127,7 +130,7 @@ D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存�
 
 `static_proven` 至少要求：条件路径在支持的指令语义内可推导、候选分发区域中的状态传递可闭合、目标唯一、替代分支的条件互斥且覆盖来源块所有正常出口。`observed` 只说明某次调用走过该目标；即使重复千次也不能升级为静态证明。`observed_and_static_proven` 还要求所有相关 D3 观测与公式一致。副作用是否可以安全绕过仍交给 D5，不能由此状态自动推出。
 
-`unresolved_rules.json` 保存失败位置、未支持指令/调用、冲突观测、缺失探针和建议补采点。模型仅可基于这些缩小的切片建议采集点或新策略；新策略经固定夹具回归后才能用于推断。
+`unresolved_rules.json` 保存失败位置、未支持指令/调用、冲突观测与缺失探针。可选的 `review-rules --use-model` 将指定规则的指令切片和有限观测交给独立模型，保存 `rule_reviews.json`；模型可指出疑点和建议补采点，但不能修改规则状态。新策略经固定夹具回归后才能用于推断。
 
 ## 5. D3+D4 联合开发顺序与验收
 

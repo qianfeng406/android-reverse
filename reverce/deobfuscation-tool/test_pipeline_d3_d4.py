@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from rule_review import build_request
 
 
 ROOT = Path(__file__).parent
@@ -69,6 +70,34 @@ class PipelineD3D4Tests(unittest.TestCase):
             self.assertEqual({(x['target_block'], x['status']) for x in source_rule['alternatives']},
                              {('0x1804', 'observed_and_static_proven'),
                               ('0x182c', 'static_proven')})
+            request = build_request(source_rule, data('instruction_table'), observations,
+                                    hashlib.sha256(binary.read_bytes()).hexdigest())
+            proposal = {'schema_version': 1, 'source_block': '0x17e0',
+                        'disposition': 'needs_check',
+                        'findings': [{'reason': 'Inspect the unobserved branch',
+                                      'evidence_refs': ['insn:0x17f4']}],
+                        'suggested_probes': [{'site': '0x17f4', 'reason': 'Capture the condition'}]}
+            saved = output / 'saved_review.json'
+            saved.write_text(json.dumps({'request': request, 'proposal': proposal}))
+            run('review-rules', '--source', '0x17e0', '--saved', saved, '--output', output)
+            self.assertEqual(data('rule_reviews')['reviews'][0]['proposal'], proposal)
+            self.assertEqual(data('transition_rules')['rules'], rules)
+            table_path = output / 'instruction_table.json'
+            table = json.loads(table_path.read_text())
+            next(x for x in table['data']['instructions'] if x['module_offset']=='0x17f4')['operands'] = 'w8, #2'
+            table_path.write_text(json.dumps(table))
+            stale = subprocess.run([sys.executable, str(ROOT/'cli.py'), 'stage', '--output', str(output),
+                                    '--from-stage', '4'], capture_output=True, text=True)
+            self.assertNotEqual(stale.returncode, 0)
+            self.assertIn('inputs changed', stale.stderr)
+            plan_path = output / 'compiled_probe_plan.json'
+            changed_plan = json.loads(plan_path.read_text())
+            changed_plan['data']['probes'][0]['site'] = '0xffff'
+            plan_path.write_text(json.dumps(changed_plan))
+            invalid = subprocess.run([sys.executable, str(ROOT/'cli.py'), 'check', '--output', str(output),
+                                      '--artifact', 'compiled_probe_plan'], capture_output=True, text=True)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn('plan content hash', invalid.stderr)
 
 
 if __name__ == '__main__':

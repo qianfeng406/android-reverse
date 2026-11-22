@@ -1,5 +1,6 @@
 rpc.exports = { configure(moduleName, symbol, runId, plan) {
   const mod = Process.getModuleByName(moduleName), entry = mod.getExportByName(symbol);
+  if ((plan.strategy && plan.strategy !== 'stack_slot_v1') || plan.probes.some(p => p.phase !== 'before')) throw new Error('unsupported probe strategy or phase');
   const sites = {}; for (const p of plan.probes) (sites[p.site] ||= []).push(p);
   const sources = new Set(plan.sources.map(s => s.source_block)); let next = 0; const active = new Map();
   Interceptor.attach(entry, {
@@ -27,8 +28,9 @@ rpc.exports = { configure(moduleName, symbol, runId, plan) {
             const values={}; for (const r of p.registers) {const x=ctx[r[0]==='w'?'x'+r.slice(1):r]; const width=r[0]==='w'?32:64; let h=x.toString().replace(/^0x/,''); if(width===32) h=h.slice(-8); values[r]={width:width,hex:'0x'+h.padStart(width/4,'0')};}
             const item={type:'probe',site:p.site,role:p.role,source_block:p.source_block,source_ordinal:call.current[p.source_block],values:values};
             if (p.role === 'dispatcher_read') {
-              const address=ctx.sp.add(parseInt(p.location.slice(3),16)); item.memory_address=address.toString();
-              try {item.values[p.location]={width:32,hex:'0x'+address.readU32().toString(16).padStart(8,'0')};}
+              const [base, displacement]=p.location.split('+');
+              const address=ctx[base].add(parseInt(displacement,16)); item.memory_address=address.toString();
+              try {const value=p.width===64 ? address.readU64() : address.readU32(); item.values[p.location]={width:p.width,hex:'0x'+value.toString(16).padStart(p.width/4,'0')};}
               catch (e) {item.read_error=String(e);}
             }
             emit(item);

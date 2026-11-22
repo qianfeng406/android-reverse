@@ -35,8 +35,11 @@ class InferTests(unittest.TestCase):
         self.assertFalse(unresolved['unresolved'])
         self.assertTrue(all(a['status'] == 'static_proven' for r in rules['rules'] for a in r['alternatives']))
         rule = next(r for r in rules['rules'] if r['source_block'] == '0x17e0')
+        self.assertEqual(rule['state_location'],'sp+0x4')
         self.assertEqual({(a['state_ast']['hex'],a['target_block']) for a in rule['alternatives']},
                          {('0x81fc94e6','0x1804'),('0xe6e37d04','0x182c')})
+        self.assertTrue(all(a['route_path'][0]=='0x18f8' and a['route_path'][-1]==a['target_block']
+                            for a in rule['alternatives']))
 
     def record(self, value, state, target):
         return {'id':'r','origin':{'source_block':'0x17e0'},
@@ -66,6 +69,15 @@ class InferTests(unittest.TestCase):
         rule = next(r for r in rules['rules'] if r['source_block'] == '0x17e0')
         self.assertIn('contradicted', [a['status'] for a in rule['alternatives']])
 
+    def test_dispatch_read_must_match_state_write(self):
+        record = self.record(2, '0x81fc94e6', '0x1804')
+        record['route']['dispatch_reads'] = [{'event_ref':'probe:r:1:1:6','site':'0x1620',
+                                              'value':{'width':32,'hex':'0x00000000'}}]
+        rules, errors = self.infer([record])
+        rule = next(r for r in rules['rules'] if r['source_block']=='0x17e0')
+        self.assertIn('contradicted', [a['status'] for a in rule['alternatives']])
+        self.assertTrue(any(e['reason']=='dispatcher_read_mismatch' for e in errors['unresolved']))
+
     def test_entry_return_and_transfer_validation(self):
         entry = {'id':'entry', 'origin':{'source_block':'0x15fc'},
                  'decision':None,
@@ -84,6 +96,7 @@ class InferTests(unittest.TestCase):
         self.assertFalse(coalesced_errors['unresolved'])
         terminal = next(r for r in rules['rules'] if r['source_block']=='0x18ec')
         self.assertEqual(terminal['transfer_kind'], 'return')
+        self.assertIsNone(terminal['state_location'])
         self.assertEqual(terminal['alternatives'][0]['status'], 'static_proven')
         for field, wrong in [('kind','direct_branch'), ('site','0x1618'), ('location','sp+0x8')]:
             bad = deepcopy(entry); bad['transfer'][field] = wrong
@@ -102,6 +115,42 @@ class InferTests(unittest.TestCase):
         rule = next(r for r in rules['rules'] if r['source_block']=='0x17e0')
         self.assertEqual(rule['alternatives'], [])
         self.assertTrue(any('unsupported_instruction' in e['reason'] for e in errors['unresolved']))
+
+    def test_unknown_guard_input_is_not_proven(self):
+        instructions = deepcopy(self.instructions)
+        load = next(i for i in instructions['instructions'] if i['module_offset']=='0x17e0')
+        load['mnemonic'], load['operands'] = 'add', 'w8, w8, #1'
+        rules, errors = self.infer(instructions=instructions)
+        rule = next(r for r in rules['rules'] if r['source_block']=='0x17e0')
+        self.assertEqual(rule['alternatives'], [])
+        self.assertTrue(any(e['reason']=='unsupported_guard_expression' for e in errors['unresolved']))
+
+    def test_register_alias_keeps_guard_sound(self):
+        instructions = deepcopy(self.instructions)
+        row = next(i for i in instructions['instructions'] if i['module_offset']=='0x17e0')
+        row['mnemonic'], row['operands'] = 'add', 'x8, x8, #1'
+        rules, errors = self.infer(instructions=instructions)
+        rule = next(r for r in rules['rules'] if r['source_block']=='0x17e0')
+        self.assertEqual(rule['alternatives'],[])
+        self.assertTrue(any(e['reason']=='unsupported_guard_expression' for e in errors['unresolved']))
+        row['mnemonic'], row['operands'] = 'mov', 'x8, #2'
+        rules, errors = self.infer(instructions=instructions)
+        rule = next(r for r in rules['rules'] if r['source_block']=='0x17e0')
+        self.assertEqual([(a['state_ast']['hex'],a['target_block']) for a in rule['alternatives']],
+                         [('0x81fc94e6','0x1804')])
+
+    def test_unsupported_probe_source_is_not_proven(self):
+        rules, errors = infer_rules(self.instructions,self.cfg,self.structure,
+                                    {'records':[],'plan_unsupported':[{'source_block':'0x17e0','reason':'state_write_count'}]},'test')
+        rule = next(r for r in rules['rules'] if r['source_block']=='0x17e0')
+        self.assertEqual(rule['alternatives'], [])
+        self.assertTrue(any('probe_plan_unsupported' in e['reason'] for e in errors['unresolved']))
+
+    def test_unknown_inference_strategy_is_explicit(self):
+        rules, errors = infer_rules(self.instructions,self.cfg,self.structure,
+                                    {'records':[],'strategy':'register_state_v1'},'test')
+        self.assertEqual(rules['rules'],[])
+        self.assertEqual(errors['unresolved'][0]['reason'],'unsupported_inference_strategy')
 
 
 if __name__ == '__main__': unittest.main()

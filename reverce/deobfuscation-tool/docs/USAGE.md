@@ -37,7 +37,7 @@ python -m unittest discover -s deobfuscation-tool -p 'test_*.py' -v
 
 ## D2 结构发现
 
-`discover` 默认启用 `fanin,recurrence,routing,state_read,state_write,provenance,side_effect` 七条原子证据规则。可用 `--rules fanin,routing,state_read,state_write` 为本次运行选择子集；缺少图与状态证据时输出 `unresolved`，不会仅凭高频循环认定分发器。规则配置保存在 `structure_candidates.json`，不修改全局变量。`observed_graph.observed_transitions` 的相邻事件只表示观察顺序，`direct_cfg_edge` 保持 `null`，不能据此断言是直接 CFG 边。
+`discover` 默认使用 `stack_comparison_chain_v1` 结构策略，启用 `fanin,recurrence,routing,state_read,state_write,provenance,side_effect` 七条原子证据规则。`--strategy` 指定结构机制，当前只有这一种已登记；未知策略明确报错。可用 `--rules fanin,routing,state_read,state_write` 为本次运行选择证据子集；缺少图与状态证据时输出 `unresolved`，不会仅凭高频循环认定分发器。规则配置保存在 `structure_candidates.json`，不修改全局变量。`observed_graph.observed_transitions` 的相邻事件只表示观察顺序，`direct_cfg_edge` 保持 `null`，不能据此断言是直接 CFG 边。
 
 首版针对共享回跳与栈状态槽比较链：从多来源汇入点寻找多个回流写入块，再检查其状态槽是否在下游路由区被读取和比较。候选包含状态位置、别名、分发块、执行入口、证据及潜在副作用；`probe_plan` 列出同块内 `CMP/TST → CSEL → 状态写入` 的条件探针。此阶段只输出候选，不证明完整转移和可 patch 性。分层分发、跨块状态更新和复杂 `BR/BLR` 仍待增强。
 
@@ -80,7 +80,17 @@ python deobfuscation-tool/cli.py infer --output deobfuscation-tool/work/lesson
 python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 4
 ```
 
-产物是 `transition_observations.json`、`transition_rules.json` 和 `unresolved_rules.json`。原始 JSONL 留在采集路径，归一化产物保存其路径和 SHA-256；转移观测按运行、线程、调用及来源块出现序号配对。`router_observations` 单独保留分发读取事件，`quality` 标明缺失或歧义。D4 的 `static_proven` 表示在当前支持的指令语义和 D2 候选区域内静态推导闭合；`observed_and_static_proven` 还表示本轮采集与之吻合。它尚不代表绕过分发器安全，副作用审计属于 D5。
+产物是 `transition_observations.json`、`transition_rules.json` 和 `unresolved_rules.json`。原始 JSONL 留在采集路径，归一化产物保存其路径和 SHA-256；转移观测按运行、线程、调用及来源块出现序号配对，并要求探针事件发生在该次来源块与下个块事件之间。`router_observations` 保留分发读取事件，`route.dispatch_reads` 将其关联到转移；D4 遇到读取值与写入值冲突会标记 `contradicted`。`quality` 标明缺失或歧义。
+
+新编译的计划使用 `stack_slot_v1` 策略，支持 `SP/X29` 栈槽的 `STR/STUR` 写入及 `LDR/LDUR` 读取。计划中的 `unsupported` 明确列出没有匹配写入、同块多次写入或缺少分发读取的来源；无可用写入时命令直接报错。D4 的 `route_path` 列出静态求出的分发路径及最终目标，供 D5 审计路径上的指令。`static_proven` 表示在当前支持的指令语义和 D2 候选区域内静态推导闭合，遇到 `unknown` 条件不会给出该状态；`observed_and_static_proven` 还表示本轮采集与之吻合。它尚不代表绕过分发器安全，副作用审计属于 D5。
+
+需要模型辅助审查时，指定一条已生成规则：
+
+```powershell
+python deobfuscation-tool/cli.py review-rules --output deobfuscation-tool/work/lesson --source 0x17e0 --use-model --model-timeout 240
+```
+
+该命令按 `config/default.toml` 启动独立、只读的 Codex CLI 任务，将该规则的指令切片和有限条观测提交给模型。模型的意见保存在 `rule_reviews.json`，可报告疑点和建议补采的指令地址；它不修改 `transition_rules.json`，也不充当静态证明。离线重放用 `--saved path/to/review.json` 替代 `--use-model`，保存文件须含与当前请求完全相同的 `request` 和已核查证据引用的 `proposal`。不同来源重复执行会在 `rule_reviews.json` 中累计，D4 规则变化时旧审查自动失效。
 
 首版只验证 demo 的共享回跳、栈状态槽、同块条件选择和比较链。间接 `BR/BLR`、跨块状态计算、多局部分发及递归目标函数会保持未解或采集报错。D3 采集的是原始位向量与执行路径，不记录函数参数和返回值；需结合 D1 结果判断测试输入覆盖。单次采集目前覆盖一个 PID，重新采集时用新 `--run-id` 和新 JSONL 路径；`import-probes` 会以本轮文件替换旧 D3 产物。
 
