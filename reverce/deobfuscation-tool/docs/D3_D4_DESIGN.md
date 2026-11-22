@@ -1,19 +1,19 @@
 # D3 定点采集与 D4 转移推导设计
 
-**状态：设计完成，尚未实现。** 两阶段共用一份带版本的数据契约：D3 保存每一次实际转移的观测事实，D4 在这些事实和静态指令上推导条件与目标。D3 不猜公式；D4 不把一次观察当作全输入证明。
+**状态：demo 首版已实现；实测见 [验收记录](D3_D4_ACCEPTANCE.md)。** 两阶段共用一份带版本的数据契约：D3 保存每一次实际转移的观测事实，D4 在这些事实和静态指令上推导条件与目标。D3 不猜公式；D4 不把一次观察当作全输入证明。
 
 ## 1. 边界和交接
 
 | 阶段 | 输入 | 核心工作 | 输出 | 不负责 |
 | --- | --- | --- | --- | --- |
-| D3 定点采集 | D0 指令/CFG、D1 原始 trace、D2 `structure_candidates`/`probe_plan`、本轮测试输入 | 编译探针计划；在**同一次调用**中记录条件输入、状态写入、跳转目标和块序列；逐次配对并规范化 | `probe_events.jsonl`（原始）、`transition_observations.json`（统一模板）、`capture_diagnostics.json` | 判断未执行分支的条件公式；宣布某条边可 patch |
+| D3 定点采集 | D0 指令/CFG、D2 `structure_candidates`/`probe_plan`、本轮运行 | 编译探针计划；在**同一次调用**中记录条件输入、状态写入、跳转目标和块序列；逐次配对并规范化 | 主机指定的原始 JSONL、`compiled_probe_plan.json`、`transition_observations.json`（内含诊断） | 判断未执行分支的条件公式；宣布某条边可 patch |
 | D4 转移推导 | D0 静态数据、D2 候选、D3 统一观测 | 按指令语义反向切片，求条件、状态表达式和分发映射；逐条核对观测与反例 | `transition_rules.json`、`unresolved_rules.json` | 写入二进制；证明绕过指令没有副作用（D5） |
 
 交接规则：所有产物使用同一个 `binary_id`、函数范围和版本号。D3 新运行的探针与块事件必须共享 `run_id + thread_id + invocation_id`；**不能**把新探针值按“输入相同”拼接到旧 D1 trace。旧 trace 只用于选点和覆盖对比。若某次调用缺少块事件、探针事件或终止标记，D3 输出明确缺失原因，D4 不把它当作完整的已观察转移。
 
 ## 2. 统一的 D3 观测模板
 
-一条 `transition_observation` 对应“某次调用中某个来源块的**一次出现**”，不是一个来源块的汇总。根对象沿用 D0 的 `schema_version`、`kind`、`binary_id`、`data` 包装。`data` 包含 `function`、`structure_id`、`plan_id`、`capture_ids`、`records`、`unpaired_events` 和 `diagnostics`。`structure_id` 是选定 D2 候选及其规则配置的哈希；`plan_id` 是包含该 `structure_id` 的规范化探针计划哈希。这样模型或规则改变候选、探针改变位置时，旧采集不会被误配到新计划。
+一条 `transition_observation` 对应“某次调用中某个来源块的**一次出现**”，不是一个来源块的汇总。根对象沿用 D0 的 `schema_version`、`kind`、`binary_id`、`data` 包装。`data` 包含 `function`、`structure_id`、`plan_id`、`capture_ids`、`capture_source`（原始路径及 SHA-256）、`records`、`router_observations`、`unpaired_events` 和 `diagnostics`。`structure_id` 是选定 D2 候选及其规则配置的哈希；`plan_id` 是包含该 `structure_id` 的规范化探针计划哈希。这样模型或规则改变候选、探针改变位置时，旧采集不会被误配到新计划。
 
 每个 `record` 固定使用下表字段；适用性不同的字段填 `null` 并写明原因，不为间接跳转另造一套 JSON 格式。
 
@@ -29,7 +29,7 @@
 
 所有机器值使用 `{ "width": 32, "hex": "0x00000002" }` 这类定宽位向量表示；有符号解释是**附加视图**，不改变原始比特。地址统一表示为 `{binary_id, module_offset}` 或明确的其他模块地址。寄存器名使用执行时实际宽度（`w8`/`x8`）；内存位置同时保留相对表达式和本次调用的实际地址，避免不同栈帧混淆。D3 内存位置规范为 `sp+0x4`、`sp+0x10` 等显式十六进制；计划编译器负责把 D2 当前的 `sp+4`、`sp+10` 形式转换过来，避免把后者误读成十进制偏移。
 
-以下是**未来采集记录的格式示例，并非本次 D2 已有的真实探针数据**：
+以下是数据格式示例，数值用于说明字段：
 
 ```json
 {
@@ -77,9 +77,9 @@ D2 当前的 `probe_plan` 给出四处 `condition_at` 和 `state_write_at`，但
 
 ### 4.1 统一内部表达式
 
-D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存器/内存读取、算术/位运算、比较、条件选择 `ite`、地址计算。主要输出 AST；可读的汇编式文本只是展示字段。所有计算遵守 ARM64 对应位宽的截断和有符号比较语义，例如 `W` 寄存器是 32 位，`LT/GT` 使用有符号条件，`TST` 更新标志。没有支持的指令或跨块定义时，切片停在 `unknown`，不能用某次运行的值冒充普遍常量。
+D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存器/内存读取、算术/位运算、比较和条件选择 `ite`。首版在已选的静态基本块内做符号解释，并以具体状态值遍历比较链。计算遵守 ARM64 对应位宽的截断和有符号比较语义，例如 `W` 寄存器是 32 位，`LT/GT` 使用有符号条件，`TST` 更新标志。没有支持的指令或跨块定义时输出未解，不能用某次运行的值冒充普遍常量。
 
-首版策略覆盖 demo 的 `MOV/MOVK` 常量拼接、`LDR/STR` 栈槽、`CMP/TST/SUBS` 标志、`CSEL`、直接条件分支和比较链分发。策略接口统一为 `infer(source, static_slice, observations, structure) -> alternatives + unresolved`；后续的间接地址、调用返回、编码状态增加语义策略，不改 D3 模板。
+首版语义覆盖 demo 的 `MOV/MOVK` 常量拼接、`LDR/STR` 栈槽、`CMP/TST/SUBS` 标志、`CSEL`、直接条件分支和比较链分发。公开入口为 `infer_rules(instructions, cfg, structure, observations, binary_id)`；后续的间接地址、调用返回、编码状态可增加语义分支，不改 D3 观测模板。
 
 ### 4.2 从状态写入推到执行目标
 
@@ -91,7 +91,7 @@ D4 从 D0 指令和 D3 观测构建带位宽的表达式 AST：常量、寄存�
 
 `transition_rules.json` 的每条来源记录包含 `source_block`、`transfer_kind`、`alternatives`、`coverage`、`evidence`、`unresolved`。每个 alternative 使用固定字段 `guard_ast`、`state_ast`（不适用为 `null`）、`target_ast`/`target_block`、`observation_ids`、`instruction_refs`、`status`。状态沿用现有 `observed`、`static_proven`、`observed_and_static_proven`、`unresolved`，另有冲突记录 `contradicted`，后者绝不能进入 D5。
 
-同样以 `0x17E0` 为例，未来的 D4 记录形状如下（地址和值来自静态样本，`observation_ids` 仅示意；**尚未运行 D4**）：
+同样以 `0x17E0` 为例，D4 记录形状如下（`observation_ids` 仅示意）：
 
 ```json
 {

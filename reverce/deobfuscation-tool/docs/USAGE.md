@@ -1,8 +1,8 @@
-# D0–D2 使用说明
+# D0–D4 使用说明
 
 ## 当前工具能做什么
 
-D0/D1 可为一个 **ARM64 ELF `.so` 中的已知函数**建立静态指令与 CFG，采集该函数一次调用期间执行线程的 Stalker block/call/ret 事件，并将多次运行归一化到同一二进制偏移。D2 根据图和状态读写提出分发结构候选与定点采集计划。它尚不推导完整业务边或自动 patch；这些属于 D3–D5。
+D0/D1 可为一个 **ARM64 ELF `.so` 中的已知函数**建立静态指令与 CFG，采集该函数一次调用期间执行线程的 Stalker block/call/ret 事件，并将多次运行归一化到同一二进制偏移。D2 根据图和状态读写提出分发结构候选。D3 编译定点探针计划并归一化同轮采集；D4 依据静态指令推导转移并核对观测。自动 patch 属于 D5/D6，尚未实现。
 
 **安装了 APK 并不等于可以直接运行本工具 trace。** 当前采集器需要：
 
@@ -33,7 +33,7 @@ python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson -
 python -m unittest discover -s deobfuscation-tool -p 'test_*.py' -v
 ```
 
-成功后输出目录包含 `binary_manifest.json`、`instruction_table.json`、`static_cfg.json`、`raw_trace.json`、`structure_candidates.json`、`probe_plan.json` 和 `observed_graph.dot`。安装 Graphviz 后可用 `dot -Tsvg deobfuscation-tool/work/lesson/observed_graph.dot -o deobfuscation-tool/work/lesson/observed_graph.svg` 查看图；虚线只代表相邻观察事件，不代表已证明的直接 CFG 边。`stage --from-stage 2` 只验证 D2 保存的产物，不会运行尚未实现的 D3。旧 trace 缺少的线程、调用和块终点字段保持缺失标记。
+成功后输出目录包含 `binary_manifest.json`、`instruction_table.json`、`static_cfg.json`、`raw_trace.json`、`structure_candidates.json`、`probe_plan.json` 和 `observed_graph.dot`。安装 Graphviz 后可用 `dot -Tsvg deobfuscation-tool/work/lesson/observed_graph.dot -o deobfuscation-tool/work/lesson/observed_graph.svg` 查看图；虚线只代表相邻观察事件，不代表已证明的直接 CFG 边。`stage --from-stage 2` 只验证 D2 保存的产物，不会自动运行 D3。旧 trace 缺少的线程、调用和块终点字段保持缺失标记。
 
 ## D2 结构发现
 
@@ -61,6 +61,30 @@ python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/target -
 ```
 
 同一二进制的新采集使用新的 `--run-id`，导入时加 `--merge`。工具拒绝重复 run ID、缺失或乱序事件、跨调用事件，以及不匹配的本地二进制产物。采集错误会写入 JSONL；导入遇到错误记录时失败。
+
+## D3 定点采集与 D4 转移推导
+
+先完成上面的 D0–D2 命令。`plan-probes` 从已选结构候选、指令和 CFG 自动补齐入口及状态写入点；`compiled_probe_plan.json` 是采集脚本的精确配置。运行中的目标进程须已加载同版 `.so`，且目标函数是可查到的导出符号。采集进程必须先附加，再触发函数调用：
+
+```powershell
+python deobfuscation-tool/cli.py plan-probes --output deobfuscation-tool/work/lesson
+python deobfuscation-tool/host_probe.py --device 127.0.0.1:27042 --pid 1234 --script deobfuscation-tool/collect_probes.js --plan deobfuscation-tool/work/lesson/compiled_probe_plan.json --module libflatten_fla_android.so --symbol lesson_score --run-id probe-1 --output deobfuscation-tool/work/probe-1.jsonl
+```
+
+`--pid` 是运行中进程的 PID，`--device` 是 Frida host 可达的 server 地址；`--module` 和 `--symbol` 必须对应加载的库和导出函数。`--run-id` 标识这一轮采集；`--output` 必须是尚不存在的 JSONL 路径。采集器一直等待直至进程脱离或按 Ctrl+C 结束。采集结束后再运行：
+
+```powershell
+python deobfuscation-tool/cli.py import-probes --capture deobfuscation-tool/work/probe-1.jsonl --output deobfuscation-tool/work/lesson
+python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 3
+python deobfuscation-tool/cli.py infer --output deobfuscation-tool/work/lesson
+python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 4
+```
+
+产物是 `transition_observations.json`、`transition_rules.json` 和 `unresolved_rules.json`。原始 JSONL 留在采集路径，归一化产物保存其路径和 SHA-256；转移观测按运行、线程、调用及来源块出现序号配对。`router_observations` 单独保留分发读取事件，`quality` 标明缺失或歧义。D4 的 `static_proven` 表示在当前支持的指令语义和 D2 候选区域内静态推导闭合；`observed_and_static_proven` 还表示本轮采集与之吻合。它尚不代表绕过分发器安全，副作用审计属于 D5。
+
+首版只验证 demo 的共享回跳、栈状态槽、同块条件选择和比较链。间接 `BR/BLR`、跨块状态计算、多局部分发及递归目标函数会保持未解或采集报错。D3 采集的是原始位向量与执行路径，不记录函数参数和返回值；需结合 D1 结果判断测试输入覆盖。单次采集目前覆盖一个 PID，重新采集时用新 `--run-id` 和新 JSONL 路径；`import-probes` 会以本轮文件替换旧 D3 产物。
+
+可复现的设备验收、实际观测数量和局限见 [D3/D4 验收](D3_D4_ACCEPTANCE.md)。
 
 ## 每阶段的维护要求
 

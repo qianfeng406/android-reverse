@@ -10,6 +10,8 @@ from normalize_capture import normalize
 from model_adapter import ReplayAdapter
 from model_adapter import CodexExecAdapter
 from discover import discover, to_dot, choose_model_rules, DEFAULT_RULES
+from probe import compile_plan, normalize_probe_capture
+from infer import infer_rules
 from validation import validate
 from pathlib import Path
 
@@ -34,7 +36,7 @@ def read(out, name, binary_id=None):
     if 'data' not in obj: raise ValueError('missing data: ' + str(path))
     data = obj['data']
     if not isinstance(data, dict): raise ValueError('invalid artifact data: ' + str(path))
-    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'model_proposal':['request','proposal','adapter']}
+    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'compiled_probe_plan':['function','structure_id','plan_id','binary_id','sources','probes'], 'transition_observations':['function','structure_id','plan_id','capture_ids','capture_source','records','router_observations','unpaired_events','diagnostics'], 'transition_rules':['function','structure_id','plan_id','rules'], 'unresolved_rules':['function','structure_id','plan_id','unresolved'], 'model_proposal':['request','proposal','adapter']}
     if name not in fields: raise ValueError('unsupported artifact kind: ' + name)
     if any(field not in data for field in fields[name]): raise ValueError('missing required fields: ' + str(path))
     if name == 'binary_manifest' and data['sha256'] != obj['binary_id']: raise ValueError('manifest hash mismatch')
@@ -85,6 +87,9 @@ def main():
     a = sub.add_parser('import-capture'); a.add_argument('--binary', required=True); a.add_argument('--module', required=True); a.add_argument('--capture', required=True); a.add_argument('--output', required=True); a.add_argument('--merge', action='store_true')
     a = sub.add_parser('replay'); a.add_argument('--request', required=True); a.add_argument('--saved', required=True); a.add_argument('--output', required=True)
     a = sub.add_parser('discover'); a.add_argument('--output', required=True); a.add_argument('--rules', default=','.join(DEFAULT_RULES)); a.add_argument('--use-model', action='store_true'); a.add_argument('--model-timeout', type=int, default=120)
+    a = sub.add_parser('plan-probes'); a.add_argument('--output', required=True)
+    a = sub.add_parser('import-probes'); a.add_argument('--capture', required=True); a.add_argument('--output', required=True)
+    a = sub.add_parser('infer'); a.add_argument('--output', required=True)
     a = sub.add_parser('stage'); a.add_argument('--output', required=True); a.add_argument('--from-stage', type=int, required=True)
     a = sub.add_parser('check'); a.add_argument('--output', required=True); a.add_argument('--artifact', required=True)
     args = p.parse_args(); out = Path(args.output)
@@ -155,15 +160,55 @@ def main():
         write(out, 'structure_candidates', bid, structure)
         write(out, 'probe_plan', bid, plan)
         (out / 'observed_graph.dot').write_text(to_dot(structure), encoding='utf-8')
+    elif args.command == 'plan-probes':
+        bid = read(out, 'binary_manifest')['binary_id']
+        instruction = read(out, 'instruction_table', bid)['data']
+        cfg = read(out, 'static_cfg', bid)['data']
+        structure = read(out, 'structure_candidates', bid)['data']
+        probes = read(out, 'probe_plan', bid)['data']
+        plan = compile_plan(instruction, cfg, structure, probes, bid)
+        write(out, 'compiled_probe_plan', bid, plan)
+    elif args.command == 'import-probes':
+        bid = read(out, 'binary_manifest')['binary_id']
+        plan = read(out, 'compiled_probe_plan', bid)['data']
+        structure = read(out, 'structure_candidates', bid)['data']
+        cfg = read(out, 'static_cfg', bid)['data']
+        observations = normalize_probe_capture(args.capture, bid, plan, structure, cfg)
+        write(out, 'transition_observations', bid, observations)
+    elif args.command == 'infer':
+        bid = read(out, 'binary_manifest')['binary_id']
+        instruction = read(out, 'instruction_table', bid)['data']
+        cfg = read(out, 'static_cfg', bid)['data']
+        structure = read(out, 'structure_candidates', bid)['data']
+        observations = read(out, 'transition_observations', bid)['data']
+        plan = read(out, 'compiled_probe_plan', bid)['data']
+        if observations['plan_id'] != plan['plan_id'] or observations['structure_id'] != plan['structure_id']:
+            raise ValueError('D3 observation/plan mismatch')
+        rules, unresolved = infer_rules(instruction, cfg, structure, observations, bid)
+        write(out, 'transition_rules', bid, rules)
+        write(out, 'unresolved_rules', bid, unresolved)
     elif args.command == 'stage':
         if args.from_stage not in range(0, 7): raise ValueError('stage must be 0 through 6')
-        required = {0:['binary_manifest'], 1:['binary_manifest','instruction_table','static_cfg','raw_trace'], 2:['structure_candidates','probe_plan'], 3:['transition_observations'], 4:['transition_rules'], 5:['patch_plan'], 6:['verification_report']}
+        required = {0:['binary_manifest'], 1:['binary_manifest','instruction_table','static_cfg','raw_trace'], 2:['structure_candidates','probe_plan'], 3:['compiled_probe_plan','transition_observations'], 4:['transition_rules','unresolved_rules'], 5:['patch_plan'], 6:['verification_report']}
         manifest = read(out, 'binary_manifest'); bid = manifest['binary_id']
         artifacts = {name:read(out, name, bid) for name in required[args.from_stage]}
         if args.from_stage == 2:
             if artifacts['structure_candidates']['data']['selected_candidate'] != artifacts['probe_plan']['data']['candidate_hub']:
                 raise ValueError('D2 candidate/probe plan mismatch')
-        print('stage %d inputs validated; subsequent stages are not implemented' % args.from_stage)
+        if args.from_stage == 3:
+            plan = artifacts['compiled_probe_plan']['data']
+            observed = artifacts['transition_observations']['data']
+            if any(plan[k] != observed[k] for k in ('plan_id', 'structure_id', 'function')):
+                raise ValueError('D3 plan/observation mismatch')
+        if args.from_stage == 4:
+            rules = artifacts['transition_rules']['data']
+            unresolved = artifacts['unresolved_rules']['data']
+            if any(rules[k] != unresolved[k] for k in ('plan_id', 'structure_id', 'function')):
+                raise ValueError('D4 rules/unresolved mismatch')
+            observed = read(out, 'transition_observations', bid)['data']
+            if any(rules[k] != observed[k] for k in ('plan_id', 'structure_id', 'function')):
+                raise ValueError('D4 rules/observations mismatch')
+        print('stage %d inputs validated' % args.from_stage)
     else:
         print(json.dumps(read(out, args.artifact), indent=2))
 

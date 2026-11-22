@@ -62,6 +62,38 @@ def validate(kind, data, binary_id):
         require(isinstance(data.get('probes'),list) and isinstance(data.get('unresolved'),list), 'probes')
         for probe in data['probes']:
             require(isinstance(probe,dict) and all(offset(probe.get(k)) for k in ('source_block','condition_at','state_write_at')) and refs(probe.get('evidence')), 'probe')
+    elif kind == 'compiled_probe_plan':
+        require(data.get('binary_id') == binary_id and isinstance(data.get('function'),str), 'identity')
+        require(all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('structure_id','plan_id')), 'plan hashes')
+        require(isinstance(data.get('sources'),list) and bool(data['sources']) and isinstance(data.get('probes'),list) and bool(data['probes']), 'plan entries')
+        for source in data['sources']:
+            require(isinstance(source,dict) and offset(source.get('source_block')) and offset(source.get('transfer_site')) and isinstance(source.get('location'),str), 'source')
+        for probe in data['probes']:
+            require(isinstance(probe,dict) and offset(probe.get('site')) and probe.get('role') in ('state_write','decision','dispatcher_read') and isinstance(probe.get('registers'),list), 'probe')
+    elif kind == 'transition_observations':
+        require(isinstance(data.get('function'),str) and isinstance(data.get('capture_ids'),list) and isinstance(data.get('records'),list) and isinstance(data.get('unpaired_events'),list) and isinstance(data.get('diagnostics'),list), 'observation')
+        require(all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('structure_id','plan_id')), 'observation hashes')
+        require(isinstance(data.get('capture_source'),dict) and isinstance(data['capture_source'].get('path'),str) and re.fullmatch(r'[0-9a-f]{64}',data['capture_source'].get('sha256','')), 'capture source')
+        require(isinstance(data.get('router_observations'),list), 'router observations')
+        require(bool(data['records']), 'no observed source executions')
+        ids=set()
+        for record in data['records']:
+            require(isinstance(record,dict) and isinstance(record.get('id'),str) and record['id'] not in ids, 'record id')
+            ids.add(record['id'])
+            require(isinstance(record.get('origin'),dict) and offset(record['origin'].get('source_block')), 'origin')
+            require(isinstance(record.get('transfer'),dict) and record['transfer'].get('kind') in ('state_write','direct_branch','indirect_branch','call_return_target','unknown'), 'transfer')
+            require(isinstance(record.get('route'),dict) and isinstance(record.get('quality'),dict) and isinstance(record.get('evidence'),list), 'route/quality/evidence')
+            require(isinstance(record['quality'].get('complete'),bool) and isinstance(record['quality'].get('missing'),list) and isinstance(record['quality'].get('ambiguous'),bool), 'quality')
+    elif kind == 'transition_rules':
+        require(isinstance(data.get('function'),str) and isinstance(data.get('rules'),list), 'rules')
+        require(all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('structure_id','plan_id')), 'rule hashes')
+        for rule in data['rules']:
+            require(isinstance(rule,dict) and offset(rule.get('source_block')) and isinstance(rule.get('alternatives'),list) and isinstance(rule.get('unresolved'),list), 'rule')
+            for alt in rule['alternatives']:
+                require(isinstance(alt,dict) and alt.get('status') in ('observed','static_proven','observed_and_static_proven','unresolved','contradicted') and isinstance(alt.get('observation_ids'),list) and isinstance(alt.get('instruction_refs'),list), 'alternative')
+    elif kind == 'unresolved_rules':
+        require(isinstance(data.get('function'),str) and isinstance(data.get('unresolved'),list), 'unresolved')
+        require(all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('structure_id','plan_id')), 'unresolved hashes')
     elif kind == 'model_proposal':
         require(isinstance(data.get('request'),dict) and isinstance(data.get('proposal'),dict) and data.get('adapter') in ('replay','codex_exec'), 'proposal')
         from model_adapter import validate_proposal
