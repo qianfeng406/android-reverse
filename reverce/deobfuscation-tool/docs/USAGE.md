@@ -1,8 +1,8 @@
-# D0 和 D1 使用说明
+# D0–D2 使用说明
 
 ## 当前工具能做什么
 
-D0/D1 可为一个 **ARM64 ELF `.so` 中的已知函数**建立静态指令与 CFG，采集该函数一次调用期间执行线程的 Stalker block/call/ret 事件，并将多次运行归一化到同一二进制偏移。它还不会识别分发器、推导真实业务边或自动 patch；这些属于 D2–D5。
+D0/D1 可为一个 **ARM64 ELF `.so` 中的已知函数**建立静态指令与 CFG，采集该函数一次调用期间执行线程的 Stalker block/call/ret 事件，并将多次运行归一化到同一二进制偏移。D2 根据图和状态读写提出分发结构候选与定点采集计划。它尚不推导完整业务边或自动 patch；这些属于 D3–D5。
 
 **安装了 APK 并不等于可以直接运行本工具 trace。** 当前采集器需要：
 
@@ -28,10 +28,20 @@ python deobfuscation-tool/cli.py init --binary deobfuscation-tool/tests/fixtures
 python deobfuscation-tool/cli.py static --binary deobfuscation-tool/tests/fixtures/lesson_score/libflatten_fla_android.so --disasm deobfuscation-tool/tests/fixtures/lesson_score/lesson_score_trace_disasm.txt --function lesson_score --output deobfuscation-tool/work/lesson
 python deobfuscation-tool/cli.py import-legacy --binary deobfuscation-tool/tests/fixtures/lesson_score/libflatten_fla_android.so --log deobfuscation-tool/tests/fixtures/lesson_score/lesson_score_trace_raw.log --output deobfuscation-tool/work/lesson
 python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 1
-python -m unittest discover -s deobfuscation-tool -p test_tool.py -v
+python deobfuscation-tool/cli.py discover --output deobfuscation-tool/work/lesson
+python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 2
+python -m unittest discover -s deobfuscation-tool -p 'test_*.py' -v
 ```
 
-成功后输出目录包含 `binary_manifest.json`、`instruction_table.json`、`static_cfg.json` 和 `raw_trace.json`。`stage --from-stage 1` 只验证这些已保存的输入，不会运行尚未实现的 D2。旧 trace 缺少的线程、调用和块终点字段保持缺失标记。
+成功后输出目录包含 `binary_manifest.json`、`instruction_table.json`、`static_cfg.json`、`raw_trace.json`、`structure_candidates.json`、`probe_plan.json` 和 `observed_graph.dot`。安装 Graphviz 后可用 `dot -Tsvg deobfuscation-tool/work/lesson/observed_graph.dot -o deobfuscation-tool/work/lesson/observed_graph.svg` 查看图；虚线只代表相邻观察事件，不代表已证明的直接 CFG 边。`stage --from-stage 2` 只验证 D2 保存的产物，不会运行尚未实现的 D3。旧 trace 缺少的线程、调用和块终点字段保持缺失标记。
+
+## D2 结构发现
+
+`discover` 默认启用 `fanin,recurrence,routing,state_read,state_write,provenance,side_effect` 七条原子证据规则。可用 `--rules fanin,routing,state_read,state_write` 为本次运行选择子集；缺少图与状态证据时输出 `unresolved`，不会仅凭高频循环认定分发器。规则配置保存在 `structure_candidates.json`，不修改全局变量。`observed_graph.observed_transitions` 的相邻事件只表示观察顺序，`direct_cfg_edge` 保持 `null`，不能据此断言是直接 CFG 边。
+
+首版针对共享回跳与栈状态槽比较链：从多来源汇入点寻找多个回流写入块，再检查其状态槽是否在下游路由区被读取和比较。候选包含状态位置、别名、分发块、执行入口、证据及潜在副作用；`probe_plan` 列出同块内 `CMP/TST → CSEL → 状态写入` 的条件探针。此阶段只输出候选，不证明完整转移和可 patch 性。分层分发、跨块状态更新和复杂 `BR/BLR` 仍待增强。
+
+可选运行 `python deobfuscation-tool/cli.py discover --output deobfuscation-tool/work/lesson --use-model`，使用本机 Codex CLI 按 `config/default.toml` 发起独立的只读结构提案；长任务可追加 `--model-timeout 240`。提案经引用和函数范围校验后保存为 `model_proposal.json`。模型可在 `checks_requested` 中列出 `rule:<规则名>` 来选择可选规则；图、复现与状态证据所需的五条核心规则始终执行，最终产物记录实际规则。模型不能直接修改 CFG 或探针地址；不加开关时完全离线运行。Codex 退出、超时或输出不合格式会明确失败。在线调用需要本机 CLI 可用及其登录状态；回归测试使用模拟子进程，不依赖实时模型输出。
 
 ## 对正在运行的应用采集
 

@@ -8,6 +8,8 @@ import tomli
 from static_export import export
 from normalize_capture import normalize
 from model_adapter import ReplayAdapter
+from model_adapter import CodexExecAdapter
+from discover import discover, to_dot, choose_model_rules, DEFAULT_RULES
 from validation import validate
 from pathlib import Path
 
@@ -32,7 +34,7 @@ def read(out, name, binary_id=None):
     if 'data' not in obj: raise ValueError('missing data: ' + str(path))
     data = obj['data']
     if not isinstance(data, dict): raise ValueError('invalid artifact data: ' + str(path))
-    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'model_proposal':['request','proposal','adapter']}
+    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'model_proposal':['request','proposal','adapter']}
     if name not in fields: raise ValueError('unsupported artifact kind: ' + name)
     if any(field not in data for field in fields[name]): raise ValueError('missing required fields: ' + str(path))
     if name == 'binary_manifest' and data['sha256'] != obj['binary_id']: raise ValueError('manifest hash mismatch')
@@ -82,6 +84,7 @@ def main():
     a = sub.add_parser('static'); a.add_argument('--binary', required=True); a.add_argument('--disasm', required=True); a.add_argument('--function', required=True); a.add_argument('--output', required=True)
     a = sub.add_parser('import-capture'); a.add_argument('--binary', required=True); a.add_argument('--module', required=True); a.add_argument('--capture', required=True); a.add_argument('--output', required=True); a.add_argument('--merge', action='store_true')
     a = sub.add_parser('replay'); a.add_argument('--request', required=True); a.add_argument('--saved', required=True); a.add_argument('--output', required=True)
+    a = sub.add_parser('discover'); a.add_argument('--output', required=True); a.add_argument('--rules', default=','.join(DEFAULT_RULES)); a.add_argument('--use-model', action='store_true'); a.add_argument('--model-timeout', type=int, default=120)
     a = sub.add_parser('stage'); a.add_argument('--output', required=True); a.add_argument('--from-stage', type=int, required=True)
     a = sub.add_parser('check'); a.add_argument('--output', required=True); a.add_argument('--artifact', required=True)
     args = p.parse_args(); out = Path(args.output)
@@ -111,11 +114,55 @@ def main():
     elif args.command == 'replay':
         request = json.loads(Path(args.request).read_text(encoding='utf-8')); proposal = ReplayAdapter(args.saved).propose(request)
         write(out, 'model_proposal', request['binary_id'], {'request':request, 'proposal':proposal, 'adapter':'replay'})
+    elif args.command == 'discover':
+        manifest = read(out, 'binary_manifest'); bid = manifest['binary_id']
+        instruction = read(out, 'instruction_table', bid)['data']
+        cfg = read(out, 'static_cfg', bid)['data']
+        trace = read(out, 'raw_trace', bid)['data']
+        rules = tuple(x.strip() for x in args.rules.split(',') if x.strip())
+        if instruction['function'] != cfg['function'] or instruction['source_sha256'] != cfg['source_sha256']:
+            raise ValueError('static instruction/CFG source mismatch')
+        structure, plan = discover(instruction, cfg, trace, rules, bid)
+        if args.use_model:
+            if config['model'].get('provider') != 'codex_exec':
+                raise ValueError('--use-model requires model.provider=codex_exec')
+            if args.model_timeout < 1:
+                raise ValueError('--model-timeout must be positive')
+            blocks = cfg['blocks']; selected = structure['candidates'][:3]
+            focus = set()
+            for candidate in selected:
+                focus.add(candidate['hub'])
+                focus.update(candidate['comparison_blocks'][:3])
+                focus.update(candidate['state_writers'][:2])
+            spans = [(int(b['start'],16),int(b['end_exclusive'],16)) for b in blocks if b['start'] in focus]
+            slices = [{'address':i['module_offset'],'mnemonic':i['mnemonic'],'operands':i['operands']}
+                      for i in instruction['instructions'] if any(a <= int(i['module_offset'],16) < z for a,z in spans)][:48]
+            refs = sorted({ref for x in selected for ref in x['evidence']} | {'insn:'+i['address'] for i in slices})
+            summaries = [{'hub':x['hub'], 'state_slot':x['state_slot'], 'fan_in':x['fan_in'],
+                          'observed_visits':x['observed_visits'], 'comparison_blocks':x['comparison_blocks'][:5],
+                          'state_writers':x['state_writers'][:5], 'counterexamples':x['counterexamples']}
+                         for x in selected]
+            request = {'schema_version':1, 'task':'structure_hypothesis', 'binary_id':bid,
+                       'scope':{'start':blocks[0]['start'], 'end_exclusive':blocks[-1]['end_exclusive']},
+                       'evidence_refs':refs,
+                       'facts':{'candidates':summaries, 'instruction_slice':slices, 'rules_enabled':list(rules)}}
+            proposal = CodexExecAdapter(config['model'], Path(__file__).parent, timeout=args.model_timeout).propose(request)
+            rules, requested = choose_model_rules(proposal, rules)
+            if requested:
+                structure, plan = discover(instruction, cfg, trace, rules, bid)
+                structure['model_rule_selection'] = requested
+            write(out, 'model_proposal', bid, {'request':request,'proposal':proposal,'adapter':'codex_exec'})
+        write(out, 'structure_candidates', bid, structure)
+        write(out, 'probe_plan', bid, plan)
+        (out / 'observed_graph.dot').write_text(to_dot(structure), encoding='utf-8')
     elif args.command == 'stage':
         if args.from_stage not in range(0, 7): raise ValueError('stage must be 0 through 6')
         required = {0:['binary_manifest'], 1:['binary_manifest','instruction_table','static_cfg','raw_trace'], 2:['structure_candidates','probe_plan'], 3:['transition_observations'], 4:['transition_rules'], 5:['patch_plan'], 6:['verification_report']}
         manifest = read(out, 'binary_manifest'); bid = manifest['binary_id']
-        for name in required[args.from_stage]: read(out, name, bid)
+        artifacts = {name:read(out, name, bid) for name in required[args.from_stage]}
+        if args.from_stage == 2:
+            if artifacts['structure_candidates']['data']['selected_candidate'] != artifacts['probe_plan']['data']['candidate_hub']:
+                raise ValueError('D2 candidate/probe plan mismatch')
         print('stage %d inputs validated; subsequent stages are not implemented' % args.from_stage)
     else:
         print(json.dumps(read(out, args.artifact), indent=2))

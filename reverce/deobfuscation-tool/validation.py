@@ -42,6 +42,29 @@ def validate(kind, data, binary_id):
                         if 'binary_id' in addr: require(addr['binary_id'] == binary_id, 'address binary')
                         else: require(isinstance(addr.get('module'),str), 'address module')
                     else: require(offset(addr.get('absolute')), 'absolute address')
+    elif kind == 'structure_candidates':
+        require(isinstance(data.get('rules_enabled'),list) and isinstance(data.get('observed_graph'),dict) and isinstance(data.get('candidates'),list) and isinstance(data.get('unresolved'),list), 'structure')
+        require(isinstance(data['observed_graph'].get('nodes'),list) and isinstance(data['observed_graph'].get('observed_transitions'),list), 'graph')
+        nodes={x.get('start') for x in data['observed_graph']['nodes'] if isinstance(x,dict)}
+        require(all(offset(x) for x in nodes), 'graph nodes')
+        for edge in data['observed_graph']['observed_transitions']:
+            require(isinstance(edge,dict) and edge.get('source') in nodes and edge.get('target') in nodes
+                    and isinstance(edge.get('count'),int) and edge['count'] > 0 and edge.get('direct_cfg_edge') is None
+                    and isinstance(edge.get('event_evidence'),list), 'observed edge')
+        for candidate in data['candidates']:
+            require(isinstance(candidate,dict) and candidate.get('hub') in nodes and candidate.get('status') == 'hypothesis'
+                    and isinstance(candidate.get('state_slot'),str) and isinstance(candidate.get('dispatcher_blocks'),list)
+                    and refs(candidate.get('evidence')) and isinstance(candidate.get('state_writers'),list), 'candidate')
+            require(all(x in nodes for x in candidate['dispatcher_blocks']+candidate['state_writers']), 'candidate blocks')
+        require(data.get('selected_candidate') is None or data['selected_candidate'] in {x['hub'] for x in data['candidates']}, 'selection')
+    elif kind == 'probe_plan':
+        require(data.get('candidate_hub') is None or offset(data['candidate_hub']), 'candidate hub')
+        require(isinstance(data.get('probes'),list) and isinstance(data.get('unresolved'),list), 'probes')
+        for probe in data['probes']:
+            require(isinstance(probe,dict) and all(offset(probe.get(k)) for k in ('source_block','condition_at','state_write_at')) and refs(probe.get('evidence')), 'probe')
     elif kind == 'model_proposal':
-        require(isinstance(data.get('request'),dict) and isinstance(data.get('proposal'),dict) and data.get('adapter') == 'replay', 'proposal')
+        require(isinstance(data.get('request'),dict) and isinstance(data.get('proposal'),dict) and data.get('adapter') in ('replay','codex_exec'), 'proposal')
+        from model_adapter import validate_proposal
+        require(data['request'].get('binary_id') == binary_id, 'proposal binary')
+        validate_proposal(data['request'], data['proposal'])
     else: raise ValueError('unsupported artifact kind: ' + kind)
