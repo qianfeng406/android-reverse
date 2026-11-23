@@ -314,7 +314,7 @@ def main():
                   'patched_binary_path':result['repaired_binary_path'],'static_checks':result['static_checks'],
                   'rollback_ok':result['rollback_ok'],'behavior':behavior,'status':status,
                   'patched_instruction_table':result['patched_instruction_table'],
-                  'patched_cfg':result['patched_cfg']}
+                  'patched_cfg':result['patched_cfg'],'reachable_graph':result['reachable_graph'],'display_graph':result['display_graph']}
         write(out, 'verification_report', bid, report)
         review_blocker(6, {'instruction_table':instruction,'static_cfg':cfg,'structure_candidates':structure,
                            'patch_plan':plan,'verification_report':report}, out, bid, args, config)

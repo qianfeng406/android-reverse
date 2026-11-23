@@ -47,3 +47,8 @@ Android runner 由 `android_runner.c` 使用 Kali 上 Android NDK r29 的 `aarch
 | `0x18b0`, `0x18d0` | `0x18cc`, `0x18e8` | `0x18ec`, `0x18ec` |
 
 逐条旧/新字节、条件码、证据及安全检查见本机 `patch_plan.json`；修复 CFG、每个测试输入的原件和副本输出见 `verification_report.json`。
+
+
+## 2026-11-23 清理回归
+
+实验目录：[demo-cleanup-20261123](../work/experiments/demo-cleanup-20261123/)，设备差分和 CFG 数据见 [verification_report.json](../work/experiments/demo-cleanup-20261123/verification_report.json)；可单独查看[真实入口可达图](../work/experiments/demo-cleanup-20261123/reachable_cfg.dot)和[折叠展示图](../work/experiments/demo-cleanup-20261123/display_cfg.dot)。27 个输入全部一致，回滚校验通过。真实 CFG 全量块 46、入口可达块 18 均不变；可达非 NOP 指令 111→56，状态槽可达读取 0→0、写入 8→0。展示图折叠 NOP-only 节点，不能当作二进制真实 CFG；原位 NOP 不缩小 ELF 或符号。

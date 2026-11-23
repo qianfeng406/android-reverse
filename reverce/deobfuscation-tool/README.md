@@ -49,3 +49,4 @@ python deobfuscation-tool/cli.py import-capture --binary build/artifacts/libflat
 ```
 
 同二进制后续 D1 采集可加 `--merge`，run-id 必须唯一。采集保留模块外事件和 Stalker 原始数组；不属于目标模块的地址只保留其模块名与偏移或绝对地址，不赋目标 binary_id。采集方须自行确认设备上的库与本地二进制一致；本次实测已核对设备与本地 SHA-256。相同线程的嵌套调用明确报错，不支持递归目标。D3/D4 的采集与 D5/D6 的补丁命令见[使用说明](docs/USAGE.md)。`stage` 只检查已保存输入，不会生成伪造阶段结果。模型提案可重放，在线调用需显式加 `discover --use-model`。默认配置从 `config/default.toml` 加载，也可通过顶层 `--config` 指定。验收见 [D0/D1](docs/D0_D1_ACCEPTANCE.md)、[D2](docs/D2_ACCEPTANCE.md)、[D3/D4](docs/D3_D4_ACCEPTANCE.md) 与 [D5/D6](docs/D5_D6_ACCEPTANCE.md)。
+D5 现会在模拟真实边修补后规划可证明安全的冗余指令清理，D6 复核并实施两层补丁。支持范围和本轮设备结果见[使用说明](docs/USAGE.md)与[D5/D6 验收](docs/D5_D6_ACCEPTANCE.md)。

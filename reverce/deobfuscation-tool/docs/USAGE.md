@@ -119,6 +119,8 @@ python deobfuscation-tool/cli.py stage --output path/to/results --from-stage 6
 
 `--patched-binary` 必须与原件是不同路径；补丁只写入新文件。D6 核对输入哈希、补丁旧字节、新分支的解码目标及撤销哈希，并在 `verification_report.json` 内保存修复指令表、CFG 与逐输入差分。`stage --from-stage 6` 只有报告为 `passed` 且修复文件哈希仍匹配时通过。
 
+D5 的 `cleanup` 子计划基于模拟边补丁后的可达 CFG，记录安全的跳板、状态栈槽死写入及纯寄存器死值清理；无法证明的清理项单独记录原因。D6 重新核查证明并应用计划。报告的 `reachable_graph` 是真实入口可达图，`display_graph` 仅折叠单入口 NOP 节点以便阅读。demo 实测见[D5/D6 验收](D5_D6_ACCEPTANCE.md)。
+
 Android demo 的 runner 可用 `android_runner.c` 经 NDK 编译，推送到设备后写入以下 JSON；本机实际执行示例见 [D5/D6 验收](D5_D6_ACCEPTANCE.md)。
 
 ```json

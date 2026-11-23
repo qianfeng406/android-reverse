@@ -126,6 +126,19 @@ def validate(kind, data, binary_id):
             for patch in entry['patches']:
                 require(isinstance(patch,dict) and offset(patch.get('site')) and patch.get('kind') in ('b','b.cond') and offset(patch.get('target')) and re.fullmatch(r'[0-9a-f]{8}',patch.get('old_bytes','')) is not None and re.fullmatch(r'[0-9a-f]{8}',patch.get('new_bytes','')) is not None, 'patch')
                 require(patch['site'] not in sites, 'overlapping site'); sites.add(patch['site'])
+        cleanup=data.get('cleanup')
+        if cleanup is not None:
+            require(isinstance(cleanup,dict) and cleanup.get('version') == 1 and isinstance(cleanup.get('entries'),list) and isinstance(cleanup.get('unresolved'),list), 'cleanup schema')
+            cs={}
+            for patch in cleanup['entries']:
+                require(isinstance(patch,dict) and offset(patch.get('site')) and patch.get('kind') in ('nop','invert_cond','trampoline_nop','dead_state_store','dead_register_write') and all(re.fullmatch(r'[0-9a-f]{8}',patch.get(k,'')) for k in ('old_bytes','new_bytes')) and isinstance(patch.get('reason'),str), 'cleanup patch')
+                require(patch['site'] not in cs, 'duplicate cleanup site'); cs[patch['site']]=patch
+            for patch in cs.values():
+                if patch['kind'] in ('invert_cond','trampoline_nop'):
+                    pair=cs.get(patch.get('paired_site'))
+                    require(pair is not None and pair.get('paired_site')==patch['site'] and {patch['kind'],pair['kind']}=={'invert_cond','trampoline_nop'}, 'cleanup pair')
+                    if patch['kind']=='invert_cond': require(offset(patch.get('target')) and isinstance(patch.get('condition'),str), 'cleanup branch')
+            require(all(isinstance(x,dict) and isinstance(x.get('reason'),str) and (x.get('site') is None or offset(x['site'])) for x in cleanup['unresolved']), 'cleanup unresolved')
     elif kind == 'verification_report':
         require(isinstance(data.get('function'),str) and all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('plan_hash','original_sha256','patched_sha256')), 'identity')
         require(data['original_sha256'] == binary_id and isinstance(data.get('patched_binary_path'),str), 'binary path')

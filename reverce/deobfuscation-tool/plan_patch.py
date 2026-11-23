@@ -6,6 +6,8 @@ from pathlib import Path
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
 from arm64_patch import encode_b, encode_b_cond
+from static_export import build_cfg
+from cleanup_analysis import analyze as analyze_cleanup
 from infer import canonical_slot, execute, inverse, slot, parts, val
 from probe import digest
 
@@ -201,4 +203,78 @@ def plan_patches(binary_path, instruction_table, cfg, structure, transition_rule
                 result['unresolved'].append({'source_block':entry['source_block'], 'reason':'conflicting_patch_site'})
             else: kept.append(entry)
         result['entries'] = kept
+    # Simulate the planned edges before considering cleanup. A branch to the
+    # following instruction has exactly the same architectural effects as NOP.
+    cleanup = {'version': 1, 'entries': [], 'unresolved': []}
+    if not invalid and instructions and not result['unresolved']:
+        replacements = {p['site']: p['new_bytes'] for e in result['entries'] for p in e['patches']}
+        simulated = []
+        for item in instructions:
+            raw = bytes.fromhex(replacements.get(item['module_offset'], item['bytes']))
+            d = next(engine.disasm(raw, int(item['module_offset'], 16)))
+            simulated.append({'module_offset': hex(d.address), 'bytes': raw.hex(),
+                              'mnemonic': d.mnemonic, 'operands': d.op_str})
+        graph = build_cfg(simulated)
+        blocks_by_start = {b['start']: b for b in graph}
+        todo = [simulated[0]['module_offset']]; reachable = set(); unknown = False
+        while todo:
+            node = todo.pop()
+            if node in reachable: continue
+            if node not in blocks_by_start:
+                unknown = True; continue
+            reachable.add(node)
+            for edge in blocks_by_start[node]['successors']:
+                if edge['kind'] in ('indirect_unresolved', 'call_unresolved', 'call'):
+                    unknown = True
+                elif edge.get('in_function'): todo.append(edge['target'])
+        if unknown:
+            cleanup['unresolved'].append({'reason': 'unknown_reachable_control_flow'})
+        else:
+            # Fold a conditional fallthrough through a single-branch block only
+            # when that block has exactly one reachable predecessor.
+            incoming = {n: [] for n in reachable}
+            for n in reachable:
+                for e in blocks_by_start[n]['successors']:
+                    if e.get('in_function') and e['target'] in incoming:
+                        incoming[e['target']].append(n)
+            by_addr = {int(i['module_offset'], 16): i for i in simulated}
+            inverted = {'eq':'ne','ne':'eq','cs':'cc','hs':'lo','cc':'cs','lo':'hs',
+                        'mi':'pl','pl':'mi','vs':'vc','vc':'vs','hi':'ls','ls':'hi',
+                        'ge':'lt','lt':'ge','gt':'le','le':'gt'}
+            for n in sorted(reachable, key=lambda x:int(x,16)):
+                block = blocks_by_start[n]; a = int(block['end_exclusive'],16)-4
+                first = by_addr[a]; second = by_addr.get(a+4)
+                cond = first['mnemonic'][2:] if first['mnemonic'].startswith('b.') else ''
+                if (cond not in inverted or not second or second['mnemonic'] != 'b'
+                    or int(first['operands'].lstrip('#'),0) != a+8
+                    or hex(a+4) not in reachable or incoming.get(hex(a+4)) != [n]
+                    or int(blocks_by_start[hex(a+4)]['end_exclusive'],16) != a+8): continue
+                target = int(second['operands'].lstrip('#'),0)
+                try:
+                    encoded = encode_b_cond(a,target,inverted[cond])
+                except ValueError as exc:
+                    cleanup['unresolved'].append({'site':hex(a), 'reason':'trampoline_encode:'+str(exc)})
+                    continue
+                cleanup['entries'].append({'site':hex(a), 'old_bytes':first['bytes'],
+                    'new_bytes':encoded, 'kind':'invert_cond',
+                    'condition':inverted[cond], 'target':hex(target), 'paired_site':hex(a+4),
+                    'reason':'conditional fallthrough is sole entry to one-instruction branch'})
+                cleanup['entries'].append({'site':hex(a+4), 'old_bytes':second['bytes'],
+                    'new_bytes':'1f2003d5', 'kind':'trampoline_nop', 'paired_site':hex(a),
+                    'reason':'branch folded into preceding inverted condition'})
+            proven, skipped = analyze_cleanup(simulated, state)
+            cleanup['entries'].extend(proven)
+            cleanup['unresolved'].extend(skipped)
+            already = {p['site'] for p in cleanup['entries']}
+            for item in simulated:
+                a = int(item['module_offset'], 16)
+                if not any(int(b['start'], 16) <= a < int(b['end_exclusive'], 16)
+                           for b in graph if b['start'] in reachable): continue
+                if item['module_offset'] not in already and item['mnemonic'] == 'b' and int(item['operands'].lstrip('#'), 0) == a + 4:
+                    cleanup['entries'].append({'site': hex(a), 'old_bytes': item['bytes'],
+                        'new_bytes': '1f2003d5', 'kind': 'nop',
+                        'reason': 'reachable direct branch to next instruction has no effects'})
+    else:
+        cleanup['unresolved'].append({'reason': 'edge_plan_incomplete'})
+    result['cleanup'] = cleanup
     return result

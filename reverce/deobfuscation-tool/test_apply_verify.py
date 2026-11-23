@@ -35,6 +35,21 @@ class TestApply(unittest.TestCase):
             self.assertNotEqual(before,sha(out.read_bytes()))
             self.assertEqual(result['static_checks']['reachable_dispatcher_blocks'],1)
             self.assertEqual(result['patched_instruction_table']['instructions'][0]['mnemonic'],'b')
+    def test_cleanup_on_edge_and_reject_stale(self):
+        import copy, tempfile
+        from pathlib import Path
+        from apply_verify import apply_plan
+        plan=copy.deepcopy(self.plan); patch=plan['entries'][0]['patches'][0]
+        site=int(patch['site'],16); patch['new_bytes']='01000014'; patch['target']=hex(site+4)
+        plan['cleanup']={'version':1,'entries':[{'site':hex(site),'old_bytes':'01000014','new_bytes':'1f2003d5','kind':'nop'}], 'unresolved':[]}
+        with tempfile.TemporaryDirectory() as d:
+            out=Path(d)/'patched.so'
+            result=apply_plan(self.binary,plan,out,self.table,self.cfg,self.structure)
+            self.assertTrue(result['rollback_ok'])
+            self.assertEqual(result['patched_instruction_table']['instructions'][0]['mnemonic'],'nop')
+            plan['cleanup']['entries'][0]['old_bytes']='02000014'
+            with self.assertRaises(ValueError): apply_plan(self.binary,plan,out,self.table,self.cfg,self.structure)
+
     def test_rejections(self):
         import tempfile, copy
         from pathlib import Path
