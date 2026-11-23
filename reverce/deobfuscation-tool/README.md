@@ -4,7 +4,7 @@
 
 当前 D0–D6 已在 `lesson_score` 样本上连通。D5/D6 的安全规划与验证设计见 [详细设计](docs/D5_D6_DESIGN.md)，设备实测见 [D5/D6 验收](docs/D5_D6_ACCEPTANCE.md)。阶段接口见 [开发文档](docs/DEVELOPMENT.md)，模型调用策略见 [模型介入设计核查](docs/MODEL_INTERVENTION_DESIGN.md)，后续里程碑见 [开发计划](docs/ROADMAP.md)，命令和适用范围见 [使用说明](docs/USAGE.md)。原始实验脚本仍位于本机的 `../demo/`；可复现的 demo 样本已收录在 `tests/fixtures/lesson_score/`。
 
-默认大模型配置见 [config/default.toml](config/default.toml)：可选 Codex CLI 调用使用 `gpt-6-sol`，推理强度为 `high`。D2 可请求只读结构提案，D4 可对指定转移规则请求只读审查；模型意见不直接改变结构或证明状态。
+默认大模型配置见 [config/default.toml](config/default.toml)：可选 Codex CLI 调用使用 `gpt-6-sol`，推理强度为 `high`。D2 可请求只读结构提案，D4 可对指定转移规则请求只读审查；D2–D6 还可用 `--model-policy on_blocker` 在规则分析受阻时请求结构化诊断。模型意见不直接改变结构、证明或补丁状态。
 
 ## 开发原则
 

@@ -15,6 +15,8 @@ from infer import infer_rules
 from rule_review import build_request as build_rule_review_request, ReplayRuleReviewAdapter, CodexRuleReviewAdapter
 from plan_patch import plan_patches
 from apply_verify import apply_plan, verify_behavior
+from model_policy import classify_blocker
+from model_diagnostics import build_diagnostic_request, CodexDiagnosticAdapter, ReplayDiagnosticAdapter
 from validation import validate
 from pathlib import Path
 
@@ -39,7 +41,7 @@ def read(out, name, binary_id=None):
     if 'data' not in obj: raise ValueError('missing data: ' + str(path))
     data = obj['data']
     if not isinstance(data, dict): raise ValueError('invalid artifact data: ' + str(path))
-    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'compiled_probe_plan':['function','structure_id','plan_id','binary_id','sources','probes'], 'transition_observations':['function','structure_id','plan_id','capture_ids','capture_source','records','router_observations','unpaired_events','diagnostics'], 'transition_rules':['function','structure_id','plan_id','rules'], 'unresolved_rules':['function','structure_id','plan_id','unresolved'], 'rule_reviews':['rules_hash','reviews'], 'model_proposal':['request','proposal','adapter'], 'patch_plan':['function','binary_id','plan_id','strategy','input_hashes','entries','unresolved'], 'verification_report':['function','plan_hash','original_sha256','patched_sha256','static_checks','rollback_ok','behavior','status']}
+    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'compiled_probe_plan':['function','structure_id','plan_id','binary_id','sources','probes'], 'transition_observations':['function','structure_id','plan_id','capture_ids','capture_source','records','router_observations','unpaired_events','diagnostics'], 'transition_rules':['function','structure_id','plan_id','rules'], 'unresolved_rules':['function','structure_id','plan_id','unresolved'], 'rule_reviews':['rules_hash','reviews'], 'model_proposal':['request','proposal','adapter'], 'model_diagnostic_reviews':['reviews'], 'patch_plan':['function','binary_id','plan_id','strategy','input_hashes','entries','unresolved'], 'verification_report':['function','plan_hash','original_sha256','patched_sha256','static_checks','rollback_ok','behavior','status']}
     if name not in fields: raise ValueError('unsupported artifact kind: ' + name)
     if any(field not in data for field in fields[name]): raise ValueError('missing required fields: ' + str(path))
     if name == 'binary_manifest' and data['sha256'] != obj['binary_id']: raise ValueError('manifest hash mismatch')
@@ -80,6 +82,43 @@ def legacy(path, binary_id):
     if not runs or any(x['return_value'] is None for x in runs.values()): raise ValueError('no complete runs')
     return {'source_sha256': source, 'missing_fields': ['thread_id', 'invocation_id', 'block_end', 'call_events', 'ret_events', 'out_of_function_events'], 'runs': list(runs.values())}
 
+def add_policy_args(parser, timeout=False):
+    parser.add_argument('--model-policy', choices=('off','on_blocker'), default='off')
+    parser.add_argument('--model-saved')
+    if timeout: parser.add_argument('--model-timeout', type=int, default=120)
+
+def review_blocker(stage, artifacts, out, binary_id, args, config):
+    if args.model_policy != 'on_blocker': return
+    try:
+        return _review_blocker_impl(stage, artifacts, out, binary_id, args, config)
+    except Exception as exc:
+        print('model diagnostic unavailable: %s' % exc, file=sys.stderr)
+
+def _review_blocker_impl(stage, artifacts, out, binary_id, args, config):
+    blocker = classify_blocker(stage, artifacts)
+    if blocker is None: return
+    request = build_diagnostic_request(stage, blocker, binary_id, artifacts)
+    identity = artifact_digest(request)
+    path = out / 'model_diagnostic_reviews.json'
+    previous = read(out, 'model_diagnostic_reviews', binary_id)['data']['reviews'] if path.is_file() else []
+    if any(item['request_hash'] == identity and item['status'] == 'proposed' for item in previous): return
+    previous = [item for item in previous if item['request_hash'] != identity]
+    if args.model_timeout < 1: raise ValueError('--model-timeout must be positive')
+    adapter = 'replay' if args.model_saved else 'codex_exec'
+    item = {'request_hash':identity,'request':request,'adapter':adapter,
+            'model':{'name':config['model'].get('name'),'reasoning_effort':config['model'].get('reasoning_effort')}
+                    if adapter == 'codex_exec' else None}
+    try:
+        if args.model_saved:
+            item['proposal'] = ReplayDiagnosticAdapter(args.model_saved).propose(request)
+        else:
+            if config['model'].get('provider') != 'codex_exec': raise ValueError('on_blocker requires model.provider=codex_exec')
+            item['proposal'] = CodexDiagnosticAdapter(config['model'], Path(__file__).parent, args.model_timeout).propose(request)
+        item['status'] = 'proposed'
+    except (ValueError, OSError) as exc:
+        item['status'], item['error'] = 'model_failed', str(exc)
+    write(out, 'model_diagnostic_reviews', binary_id, {'reviews':previous + [item]})
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config', default=str(Path(__file__).parent / 'config/default.toml'))
@@ -89,16 +128,22 @@ def main():
     a = sub.add_parser('static'); a.add_argument('--binary', required=True); a.add_argument('--disasm', required=True); a.add_argument('--function', required=True); a.add_argument('--output', required=True)
     a = sub.add_parser('import-capture'); a.add_argument('--binary', required=True); a.add_argument('--module', required=True); a.add_argument('--capture', required=True); a.add_argument('--output', required=True); a.add_argument('--merge', action='store_true')
     a = sub.add_parser('replay'); a.add_argument('--request', required=True); a.add_argument('--saved', required=True); a.add_argument('--output', required=True)
-    a = sub.add_parser('discover'); a.add_argument('--output', required=True); a.add_argument('--rules', default=','.join(DEFAULT_RULES)); a.add_argument('--strategy', default='stack_comparison_chain_v1'); a.add_argument('--use-model', action='store_true'); a.add_argument('--model-timeout', type=int, default=120)
-    a = sub.add_parser('plan-probes'); a.add_argument('--output', required=True)
+    a = sub.add_parser('discover'); a.add_argument('--output', required=True); a.add_argument('--rules', default=','.join(DEFAULT_RULES)); a.add_argument('--strategy', default='stack_comparison_chain_v1'); a.add_argument('--use-model', action='store_true'); a.add_argument('--model-timeout', type=int, default=120); add_policy_args(a)
+    a = sub.add_parser('plan-probes'); a.add_argument('--output', required=True); add_policy_args(a, timeout=True)
     a = sub.add_parser('import-probes'); a.add_argument('--capture', required=True); a.add_argument('--output', required=True)
-    a = sub.add_parser('infer'); a.add_argument('--output', required=True)
+    a = sub.add_parser('infer'); a.add_argument('--output', required=True); add_policy_args(a, timeout=True)
     a = sub.add_parser('review-rules'); a.add_argument('--output', required=True); a.add_argument('--source', required=True); a.add_argument('--use-model', action='store_true'); a.add_argument('--saved'); a.add_argument('--model-timeout', type=int, default=120)
-    a = sub.add_parser('plan-patch'); a.add_argument('--binary', required=True); a.add_argument('--output', required=True)
-    a = sub.add_parser('verify-patch'); a.add_argument('--binary', required=True); a.add_argument('--patched-binary', required=True); a.add_argument('--runner-spec'); a.add_argument('--output', required=True)
+    a = sub.add_parser('plan-patch'); a.add_argument('--binary', required=True); a.add_argument('--output', required=True); add_policy_args(a, timeout=True)
+    a = sub.add_parser('verify-patch'); a.add_argument('--binary', required=True); a.add_argument('--patched-binary', required=True); a.add_argument('--runner-spec'); a.add_argument('--output', required=True); add_policy_args(a, timeout=True)
     a = sub.add_parser('stage'); a.add_argument('--output', required=True); a.add_argument('--from-stage', type=int, required=True)
     a = sub.add_parser('check'); a.add_argument('--output', required=True); a.add_argument('--artifact', required=True)
     args = p.parse_args(); out = Path(args.output)
+    if getattr(args,'model_saved',None) and args.model_policy != 'on_blocker':
+        raise ValueError('--model-saved requires --model-policy on_blocker')
+    if getattr(args,'model_policy',None) == 'on_blocker' and args.model_timeout < 1:
+        raise ValueError('--model-timeout must be positive')
+    if args.command == 'discover' and args.use_model and args.model_policy == 'on_blocker':
+        raise ValueError('choose either --use-model or --model-policy on_blocker')
     with open(args.config, 'rb') as f: config = tomli.load(f)
     if not isinstance(config.get('model'), dict): raise ValueError('config requires [model]')
     if args.command == 'init':
@@ -166,14 +211,25 @@ def main():
         write(out, 'structure_candidates', bid, structure)
         write(out, 'probe_plan', bid, plan)
         (out / 'observed_graph.dot').write_text(to_dot(structure), encoding='utf-8')
+        review_blocker(2, {'instruction_table':instruction,'static_cfg':cfg,'raw_trace':trace,
+                           'structure_candidates':structure,'probe_plan':plan}, out, bid, args, config)
     elif args.command == 'plan-probes':
         bid = read(out, 'binary_manifest')['binary_id']
         instruction = read(out, 'instruction_table', bid)['data']
         cfg = read(out, 'static_cfg', bid)['data']
         structure = read(out, 'structure_candidates', bid)['data']
         probes = read(out, 'probe_plan', bid)['data']
-        plan = compile_plan(instruction, cfg, structure, probes, bid)
+        try:
+            plan = compile_plan(instruction, cfg, structure, probes, bid)
+        except ValueError as exc:
+            if str(exc).startswith(('unsupported D2 state location:', 'D3 found no supported state writes:')):
+                review_blocker(3, {'instruction_table':instruction,'static_cfg':cfg,
+                                   'structure_candidates':structure,'probe_plan':probes,
+                                   'compiled_probe_plan':{'unsupported':[{'reason':str(exc)}]}}, out, bid, args, config)
+            raise
         write(out, 'compiled_probe_plan', bid, plan)
+        review_blocker(3, {'instruction_table':instruction,'static_cfg':cfg,'structure_candidates':structure,
+                           'probe_plan':probes,'compiled_probe_plan':plan}, out, bid, args, config)
     elif args.command == 'import-probes':
         bid = read(out, 'binary_manifest')['binary_id']
         plan = read(out, 'compiled_probe_plan', bid)['data']
@@ -196,6 +252,9 @@ def main():
         rules, unresolved = infer_rules(instruction, cfg, structure, observations, bid)
         write(out, 'transition_rules', bid, rules)
         write(out, 'unresolved_rules', bid, unresolved)
+        review_blocker(4, {'instruction_table':instruction,'static_cfg':cfg,'structure_candidates':structure,
+                           'transition_observations':observations,'transition_rules':rules,
+                           'unresolved_rules':unresolved}, out, bid, args, config)
     elif args.command == 'review-rules':
         bid = read(out, 'binary_manifest')['binary_id']
         rules = read(out, 'transition_rules', bid)['data']
@@ -233,6 +292,8 @@ def main():
             raise ValueError('D4 rules/unresolved mismatch')
         plan = plan_patches(args.binary, instruction, cfg, structure, rules, unresolved, bid)
         write(out, 'patch_plan', bid, plan)
+        review_blocker(5, {'instruction_table':instruction,'static_cfg':cfg,'structure_candidates':structure,
+                           'transition_rules':rules,'unresolved_rules':unresolved,'patch_plan':plan}, out, bid, args, config)
     elif args.command == 'verify-patch':
         bid = digest(args.binary); read(out, 'binary_manifest', bid)
         plan = read(out, 'patch_plan', bid)['data']
@@ -255,6 +316,8 @@ def main():
                   'patched_instruction_table':result['patched_instruction_table'],
                   'patched_cfg':result['patched_cfg']}
         write(out, 'verification_report', bid, report)
+        review_blocker(6, {'instruction_table':instruction,'static_cfg':cfg,'structure_candidates':structure,
+                           'patch_plan':plan,'verification_report':report}, out, bid, args, config)
     elif args.command == 'stage':
         if args.from_stage not in range(0, 7): raise ValueError('stage must be 0 through 6')
         required = {0:['binary_manifest'], 1:['binary_manifest','instruction_table','static_cfg','raw_trace'], 2:['structure_candidates','probe_plan'], 3:['compiled_probe_plan','transition_observations'], 4:['transition_rules','unresolved_rules'], 5:['patch_plan'], 6:['verification_report']}

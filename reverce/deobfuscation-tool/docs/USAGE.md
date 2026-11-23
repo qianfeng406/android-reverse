@@ -92,6 +92,16 @@ python deobfuscation-tool/cli.py review-rules --output deobfuscation-tool/work/l
 
 该命令按 `config/default.toml` 启动独立、只读的 Codex CLI 任务，将该规则的指令切片和有限条观测提交给模型。模型的意见保存在 `rule_reviews.json`，可报告疑点和建议补采的指令地址；它不修改 `transition_rules.json`，也不充当静态证明。离线重放用 `--saved path/to/review.json` 替代 `--use-model`，保存文件须含与当前请求完全相同的 `request` 和已核查证据引用的 `proposal`。不同来源重复执行会在 `rule_reviews.json` 中累计，D4 规则变化时旧审查自动失效。
 
+### 按需模型诊断
+
+`discover`、`plan-probes`、`infer`、`plan-patch`、`verify-patch` 均可追加 `--model-policy on_blocker`。默认 `off` 不调用模型。启用后，脚本先执行原本的确定性阶段；仅在 D2 无候选/候选并列、D3 探针策略不支持、D4 规则未解、D5 补丁语义未解或 D6 真实行为差异等条件下，才调用配置中的只读 `codex exec`。采集丢事件、设备离线、哈希过期和旧字节不符不交给模型猜测。触发规则见 [模型介入设计核查](MODEL_INTERVENTION_DESIGN.md)。例如：
+
+```powershell
+python deobfuscation-tool/cli.py infer --output deobfuscation-tool/work/lesson --model-policy on_blocker --model-timeout 240
+```
+
+诊断保存到 `model_diagnostic_reviews.json`，包含请求、提案或调用错误；已成功的相同请求按哈希复用。离线测试可加 `--model-saved path/to/saved.json`，文件须包含与本次阻塞完全一致的 `request` 和经校验的 `proposal`。模型只建议已登记规则、请求列出的探针地址或新策略开发方向；它不改变 `transition_rules`、`patch_plan`、修复 `.so` 或 `verification_report` 的状态。没有阻塞时即使启用该选项，也不会启动模型。
+
 首版只验证 demo 的共享回跳、栈状态槽、同块条件选择和比较链。间接 `BR/BLR`、跨块状态计算、多局部分发及递归目标函数会保持未解或采集报错。D3 采集的是原始位向量与执行路径，不记录函数参数和返回值；需结合 D1 结果判断测试输入覆盖。单次采集目前覆盖一个 PID，重新采集时用新 `--run-id` 和新 JSONL 路径；`import-probes` 会以本轮文件替换旧 D3 产物。
 
 可复现的设备验收、实际观测数量和局限见 [D3/D4 验收](D3_D4_ACCEPTANCE.md)。

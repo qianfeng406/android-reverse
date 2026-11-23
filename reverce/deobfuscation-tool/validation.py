@@ -137,6 +137,25 @@ def validate(kind, data, binary_id):
         for item in data['reviews']:
             require(isinstance(item,dict) and item.get('adapter') in ('replay','codex_exec') and isinstance(item.get('request'),dict) and item['request'].get('binary_id') == binary_id, 'review')
             validate_review(item['request'],item.get('proposal'))
+    elif kind == 'model_diagnostic_reviews':
+        from model_diagnostics import validate_diagnostic
+        reviews=data.get('reviews')
+        require(isinstance(reviews,list), 'reviews')
+        hashes=set()
+        for item in reviews:
+            require(isinstance(item,dict) and item.get('adapter') in ('replay','codex_exec')
+                    and item.get('status') in ('proposed','model_failed') and isinstance(item.get('request'),dict), 'review')
+            request=item['request']
+            require(request.get('binary_id') == binary_id and request.get('stage') in range(2,7)
+                    and isinstance(request.get('evidence_refs'),list), 'request identity')
+            if item['adapter'] == 'codex_exec':
+                require(isinstance(item.get('model'),dict) and isinstance(item['model'].get('name'),str)
+                        and isinstance(item['model'].get('reasoning_effort'),str), 'model identity')
+            identity=digest(request)
+            require(item.get('request_hash') == identity and identity not in hashes, 'request hash')
+            hashes.add(identity)
+            if item['status'] == 'proposed': validate_diagnostic(request,item.get('proposal'))
+            else: require(isinstance(item.get('error'),str) and bool(item['error']), 'model error')
     elif kind == 'model_proposal':
         require(isinstance(data.get('request'),dict) and isinstance(data.get('proposal'),dict) and data.get('adapter') in ('replay','codex_exec'), 'proposal')
         from model_adapter import validate_proposal
