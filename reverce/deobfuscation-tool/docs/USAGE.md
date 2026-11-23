@@ -1,8 +1,8 @@
-# D0–D4 使用说明
+# D0–D6 使用说明
 
 ## 当前工具能做什么
 
-D0/D1 可为一个 **ARM64 ELF `.so` 中的已知函数**建立静态指令与 CFG，采集该函数一次调用期间执行线程的 Stalker block/call/ret 事件，并将多次运行归一化到同一二进制偏移。D2 根据图和状态读写提出分发结构候选。D3 编译定点探针计划并归一化同轮采集；D4 依据静态指令推导转移并核对观测。自动 patch 属于 D5/D6，尚未实现。
+D0/D1 可为一个 **ARM64 ELF `.so` 中的已知函数**建立静态指令与 CFG，采集该函数一次调用期间执行线程的 Stalker block/call/ret 事件，并将多次运行归一化到同一二进制偏移。D2 根据图和状态读写提出分发结构候选。D3 编译定点探针计划并归一化同轮采集；D4 依据静态指令推导转移并核对观测。D5 对可证明安全的直接边生成补丁计划；D6 在副本上实施、重建 CFG，并用指定 runner 做行为差分。
 
 **安装了 APK 并不等于可以直接运行本工具 trace。** 当前采集器需要：
 
@@ -95,6 +95,33 @@ python deobfuscation-tool/cli.py review-rules --output deobfuscation-tool/work/l
 首版只验证 demo 的共享回跳、栈状态槽、同块条件选择和比较链。间接 `BR/BLR`、跨块状态计算、多局部分发及递归目标函数会保持未解或采集报错。D3 采集的是原始位向量与执行路径，不记录函数参数和返回值；需结合 D1 结果判断测试输入覆盖。单次采集目前覆盖一个 PID，重新采集时用新 `--run-id` 和新 JSONL 路径；`import-probes` 会以本轮文件替换旧 D3 产物。
 
 可复现的设备验收、实际观测数量和局限见 [D3/D4 验收](D3_D4_ACCEPTANCE.md)。
+
+## D5 补丁规划与 D6 验证
+
+先完成 D0–D4，并确认 `stage --from-stage 4` 通过。本版 D5 使用 `arm64_direct_edges_v1`，只处理 demo 形态的入口状态写入、单后继回跳和 `CSEL → STR → B` 双后继回跳。它核对 ELF 原字节、D4 规则、分发路径指令、状态栈槽别名和目标块活跃值；无法证明安全时在 `patch_plan.json` 保留 `unresolved`，D6 拒绝实施不完整计划。
+
+```powershell
+python deobfuscation-tool/cli.py plan-patch --binary path/to/original.so --output path/to/results
+python deobfuscation-tool/cli.py stage --output path/to/results --from-stage 5
+python deobfuscation-tool/cli.py verify-patch --binary path/to/original.so --patched-binary path/to/results/patched.so --runner-spec path/to/runner_spec.json --output path/to/results
+python deobfuscation-tool/cli.py stage --output path/to/results --from-stage 6
+```
+
+`--patched-binary` 必须与原件是不同路径；补丁只写入新文件。D6 核对输入哈希、补丁旧字节、新分支的解码目标及撤销哈希，并在 `verification_report.json` 内保存修复指令表、CFG 与逐输入差分。`stage --from-stage 6` 只有报告为 `passed` 且修复文件哈希仍匹配时通过。
+
+Android demo 的 runner 可用 `android_runner.c` 经 NDK 编译，推送到设备后写入以下 JSON；本机实际执行示例见 [D5/D6 验收](D5_D6_ACCEPTANCE.md)。
+
+```json
+{
+  "command": ["adb", "shell", "/data/local/tmp/deobf_android_runner", "{binary}", "{input}"],
+  "original_binary": "/data/local/tmp/deobf_original.so",
+  "patched_binary": "/data/local/tmp/deobf_patched.so",
+  "inputs": [0, 1, 2, 5, 10, 30, -5],
+  "timeout": 15
+}
+```
+
+设备上两份库须分别对应当前原件与新生成的修复文件；runner 以独立进程加载指定库并输出 `RESULT:<整数>`。省略 `--runner-spec` 时仍可完成静态检查，但行为状态为 `not_run`，不能通过 D6 闸门。当前行为对比只覆盖返回值、退出码和标准错误；需要检查文件、网络或全局状态副作用的函数应扩展 runner 和比较字段。首版遇到未知内存操作、调用、间接跳转或其他分发结构会拒绝自动补丁，保留证据供新策略处理。
 
 ## 每阶段的维护要求
 

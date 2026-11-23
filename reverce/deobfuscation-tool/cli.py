@@ -13,6 +13,8 @@ from discover import discover, to_dot, choose_model_rules, DEFAULT_RULES
 from probe import compile_plan, normalize_probe_capture, selected_structure_id, digest as artifact_digest
 from infer import infer_rules
 from rule_review import build_request as build_rule_review_request, ReplayRuleReviewAdapter, CodexRuleReviewAdapter
+from plan_patch import plan_patches
+from apply_verify import apply_plan, verify_behavior
 from validation import validate
 from pathlib import Path
 
@@ -37,7 +39,7 @@ def read(out, name, binary_id=None):
     if 'data' not in obj: raise ValueError('missing data: ' + str(path))
     data = obj['data']
     if not isinstance(data, dict): raise ValueError('invalid artifact data: ' + str(path))
-    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'compiled_probe_plan':['function','structure_id','plan_id','binary_id','sources','probes'], 'transition_observations':['function','structure_id','plan_id','capture_ids','capture_source','records','router_observations','unpaired_events','diagnostics'], 'transition_rules':['function','structure_id','plan_id','rules'], 'unresolved_rules':['function','structure_id','plan_id','unresolved'], 'rule_reviews':['rules_hash','reviews'], 'model_proposal':['request','proposal','adapter']}
+    fields = {'binary_manifest':['sha256','filename'], 'instruction_table':['function','instructions','source_sha256'], 'static_cfg':['function','blocks','source_sha256'], 'raw_trace':['runs','missing_fields'], 'structure_candidates':['rules_enabled','observed_graph','candidates','selected_candidate','unresolved'], 'probe_plan':['candidate_hub','probes','unresolved'], 'compiled_probe_plan':['function','structure_id','plan_id','binary_id','sources','probes'], 'transition_observations':['function','structure_id','plan_id','capture_ids','capture_source','records','router_observations','unpaired_events','diagnostics'], 'transition_rules':['function','structure_id','plan_id','rules'], 'unresolved_rules':['function','structure_id','plan_id','unresolved'], 'rule_reviews':['rules_hash','reviews'], 'model_proposal':['request','proposal','adapter'], 'patch_plan':['function','binary_id','plan_id','strategy','input_hashes','entries','unresolved'], 'verification_report':['function','plan_hash','original_sha256','patched_sha256','static_checks','rollback_ok','behavior','status']}
     if name not in fields: raise ValueError('unsupported artifact kind: ' + name)
     if any(field not in data for field in fields[name]): raise ValueError('missing required fields: ' + str(path))
     if name == 'binary_manifest' and data['sha256'] != obj['binary_id']: raise ValueError('manifest hash mismatch')
@@ -92,6 +94,8 @@ def main():
     a = sub.add_parser('import-probes'); a.add_argument('--capture', required=True); a.add_argument('--output', required=True)
     a = sub.add_parser('infer'); a.add_argument('--output', required=True)
     a = sub.add_parser('review-rules'); a.add_argument('--output', required=True); a.add_argument('--source', required=True); a.add_argument('--use-model', action='store_true'); a.add_argument('--saved'); a.add_argument('--model-timeout', type=int, default=120)
+    a = sub.add_parser('plan-patch'); a.add_argument('--binary', required=True); a.add_argument('--output', required=True)
+    a = sub.add_parser('verify-patch'); a.add_argument('--binary', required=True); a.add_argument('--patched-binary', required=True); a.add_argument('--runner-spec'); a.add_argument('--output', required=True)
     a = sub.add_parser('stage'); a.add_argument('--output', required=True); a.add_argument('--from-stage', type=int, required=True)
     a = sub.add_parser('check'); a.add_argument('--output', required=True); a.add_argument('--artifact', required=True)
     args = p.parse_args(); out = Path(args.output)
@@ -214,6 +218,43 @@ def main():
         reviews = [x for x in previous['reviews'] if x['request']['source_block'] != args.source] if previous and previous['rules_hash'] == identity else []
         reviews.append({'request':request,'proposal':proposal,'adapter':adapter})
         write(out, 'rule_reviews', bid, {'rules_hash':identity,'reviews':sorted(reviews,key=lambda x:int(x['request']['source_block'],16))})
+    elif args.command == 'plan-patch':
+        bid = digest(args.binary); read(out, 'binary_manifest', bid)
+        instruction = read(out, 'instruction_table', bid)['data']
+        cfg = read(out, 'static_cfg', bid)['data']
+        structure = read(out, 'structure_candidates', bid)['data']
+        rules = read(out, 'transition_rules', bid)['data']
+        unresolved = read(out, 'unresolved_rules', bid)['data']
+        current = {name:artifact_digest(read(out, name, bid)['data']) for name in
+                   ('instruction_table','static_cfg','structure_candidates','transition_observations')}
+        if rules.get('input_hashes') != current or unresolved.get('input_hashes') != current:
+            raise ValueError('D4 inputs changed since inference')
+        if any(rules[k] != unresolved[k] for k in ('plan_id','structure_id','function')):
+            raise ValueError('D4 rules/unresolved mismatch')
+        plan = plan_patches(args.binary, instruction, cfg, structure, rules, unresolved, bid)
+        write(out, 'patch_plan', bid, plan)
+    elif args.command == 'verify-patch':
+        bid = digest(args.binary); read(out, 'binary_manifest', bid)
+        plan = read(out, 'patch_plan', bid)['data']
+        instruction = read(out, 'instruction_table', bid)['data']
+        cfg = read(out, 'static_cfg', bid)['data']
+        structure = read(out, 'structure_candidates', bid)['data']
+        rules = read(out, 'transition_rules', bid)['data']
+        if plan['input_hashes'].get('transition_rules') != artifact_digest(rules):
+            raise ValueError('D5 transition rules changed')
+        result = apply_plan(args.binary, plan, args.patched_binary, instruction, cfg, structure)
+        spec = json.loads(Path(args.runner_spec).read_text(encoding='utf-8')) if args.runner_spec else None
+        behavior = verify_behavior(spec, args.binary, args.patched_binary)
+        static_passed = result['rollback_ok'] and result['static_checks']['reachable_dispatcher_blocks'] == 0
+        status = ('failed' if not static_passed or behavior['status'] == 'failed' else
+                  'passed' if behavior['status'] == 'passed' else 'not_run')
+        report = {'function':plan['function'],'plan_hash':artifact_digest(plan),
+                  'original_sha256':result['original_sha256'],'patched_sha256':result['patched_sha256'],
+                  'patched_binary_path':result['repaired_binary_path'],'static_checks':result['static_checks'],
+                  'rollback_ok':result['rollback_ok'],'behavior':behavior,'status':status,
+                  'patched_instruction_table':result['patched_instruction_table'],
+                  'patched_cfg':result['patched_cfg']}
+        write(out, 'verification_report', bid, report)
     elif args.command == 'stage':
         if args.from_stage not in range(0, 7): raise ValueError('stage must be 0 through 6')
         required = {0:['binary_manifest'], 1:['binary_manifest','instruction_table','static_cfg','raw_trace'], 2:['structure_candidates','probe_plan'], 3:['compiled_probe_plan','transition_observations'], 4:['transition_rules','unresolved_rules'], 5:['patch_plan'], 6:['verification_report']}
@@ -249,6 +290,24 @@ def main():
                            ('instruction_table','static_cfg','structure_candidates','transition_observations')}
                 if rules['input_hashes'] != current:
                     raise ValueError('D4 inputs changed since inference')
+        if args.from_stage == 5:
+            plan = artifacts['patch_plan']['data']
+            rules = read(out, 'transition_rules', bid)['data']
+            current = {name:artifact_digest(read(out, name, bid)['data']) for name in
+                       ('instruction_table','static_cfg','structure_candidates','transition_rules')}
+            if plan['input_hashes'] != current or plan['plan_id'] != rules['plan_id']:
+                raise ValueError('D5 inputs changed since planning')
+        if args.from_stage == 6:
+            report = artifacts['verification_report']['data']
+            plan = read(out, 'patch_plan', bid)['data']
+            current = {name:artifact_digest(read(out, name, bid)['data']) for name in
+                       ('instruction_table','static_cfg','structure_candidates','transition_rules')}
+            if plan['input_hashes'] != current:
+                raise ValueError('D5 inputs changed since planning')
+            if report['plan_hash'] != artifact_digest(plan) or report['status'] != 'passed':
+                raise ValueError('D6 verification incomplete or plan changed')
+            if digest(report['patched_binary_path']) != report['patched_sha256']:
+                raise ValueError('D6 patched binary changed or missing')
         print('stage %d inputs validated' % args.from_stage)
     else:
         print(json.dumps(read(out, args.artifact), indent=2))

@@ -2,7 +2,7 @@
 
 本目录用于开发基于静态分析与运行时 trace 的控制流反混淆工具。首个验证对象是 `demo/lesson_score` 的 ARM64 OLLVM 平坦化样本；后续通过策略扩展支持间接跳转、多分发器和混合块。
 
-当前 D0–D4 已实现 demo 首版，D3/D4 的数据契约见 [详细设计](docs/D3_D4_DESIGN.md)，实测结果见 [D3/D4 验收](docs/D3_D4_ACCEPTANCE.md)。阶段接口见 [开发文档](docs/DEVELOPMENT.md)，后续里程碑见 [开发计划](docs/ROADMAP.md)，命令和适用范围见 [使用说明](docs/USAGE.md)。原始实验脚本仍位于本机的 `../demo/`；可复现的 demo 样本已收录在 `tests/fixtures/lesson_score/`。
+当前 D0–D6 已在 `lesson_score` 样本上连通。D5/D6 的安全规划与验证设计见 [详细设计](docs/D5_D6_DESIGN.md)，设备实测见 [D5/D6 验收](docs/D5_D6_ACCEPTANCE.md)。阶段接口见 [开发文档](docs/DEVELOPMENT.md)，后续里程碑见 [开发计划](docs/ROADMAP.md)，命令和适用范围见 [使用说明](docs/USAGE.md)。原始实验脚本仍位于本机的 `../demo/`；可复现的 demo 样本已收录在 `tests/fixtures/lesson_score/`。
 
 默认大模型配置见 [config/default.toml](config/default.toml)：可选 Codex CLI 调用使用 `gpt-6-sol`，推理强度为 `high`。D2 可请求只读结构提案，D4 可对指定转移规则请求只读审查；模型意见不直接改变结构或证明状态。
 
@@ -31,6 +31,11 @@ python deobfuscation-tool/cli.py import-probes --capture deobfuscation-tool/work
 python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 3
 python deobfuscation-tool/cli.py infer --output deobfuscation-tool/work/lesson
 python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 4
+python deobfuscation-tool/cli.py plan-patch --binary deobfuscation-tool/tests/fixtures/lesson_score/libflatten_fla_android.so --output deobfuscation-tool/work/lesson
+python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 5
+# 将原件和修复副本交给设备 runner 后，按使用说明准备 runner_spec.json：
+python deobfuscation-tool/cli.py verify-patch --binary deobfuscation-tool/tests/fixtures/lesson_score/libflatten_fla_android.so --patched-binary deobfuscation-tool/work/lesson/patched.so --runner-spec deobfuscation-tool/work/lesson/runner_spec.json --output deobfuscation-tool/work/lesson
+python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/lesson --from-stage 6
 python -m unittest discover -s deobfuscation-tool -p 'test_*.py' -v
 ```
 
@@ -43,4 +48,4 @@ python deobfuscation-tool/host_collect.py --device 127.0.0.1:27042 --pid 1234 --
 python deobfuscation-tool/cli.py import-capture --binary build/artifacts/libflatten_fla_android.so --module libflatten_fla_android.so --capture capture.jsonl --output work/lesson
 ```
 
-同二进制后续 D1 采集可加 `--merge`，run-id 必须唯一。采集保留模块外事件和 Stalker 原始数组；不属于目标模块的地址只保留其模块名与偏移或绝对地址，不赋目标 binary_id。采集方须自行确认设备上的库与本地二进制一致；本次实测已核对设备与本地 SHA-256。相同线程的嵌套调用明确报错，不支持递归目标。D3/D4 的新采集命令见[使用说明](docs/USAGE.md)。D5/D6 尚未实现；`stage` 只检查已保存输入，不会生成伪造阶段结果。模型提案可重放，在线调用需显式加 `discover --use-model`。默认配置从 `config/default.toml` 加载，也可通过顶层 `--config` 指定。验收见 [D0/D1](docs/D0_D1_ACCEPTANCE.md)、[D2](docs/D2_ACCEPTANCE.md) 与 [D3/D4](docs/D3_D4_ACCEPTANCE.md)。
+同二进制后续 D1 采集可加 `--merge`，run-id 必须唯一。采集保留模块外事件和 Stalker 原始数组；不属于目标模块的地址只保留其模块名与偏移或绝对地址，不赋目标 binary_id。采集方须自行确认设备上的库与本地二进制一致；本次实测已核对设备与本地 SHA-256。相同线程的嵌套调用明确报错，不支持递归目标。D3/D4 的采集与 D5/D6 的补丁命令见[使用说明](docs/USAGE.md)。`stage` 只检查已保存输入，不会生成伪造阶段结果。模型提案可重放，在线调用需显式加 `discover --use-model`。默认配置从 `config/default.toml` 加载，也可通过顶层 `--config` 指定。验收见 [D0/D1](docs/D0_D1_ACCEPTANCE.md)、[D2](docs/D2_ACCEPTANCE.md)、[D3/D4](docs/D3_D4_ACCEPTANCE.md) 与 [D5/D6](docs/D5_D6_ACCEPTANCE.md)。

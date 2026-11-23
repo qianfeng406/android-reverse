@@ -111,6 +111,26 @@ def validate(kind, data, binary_id):
         require(all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('structure_id','plan_id')), 'unresolved hashes')
         if data.get('input_hashes') is not None:
             require(isinstance(data['input_hashes'],dict) and set(data['input_hashes']) == {'instruction_table','static_cfg','structure_candidates','transition_observations'} and all(re.fullmatch(r'[0-9a-f]{64}',x) for x in data['input_hashes'].values()), 'unresolved input hashes')
+    elif kind == 'patch_plan':
+        require(data.get('binary_id') == binary_id and isinstance(data.get('function'),str), 'identity')
+        require(data.get('strategy') == 'arm64_direct_edges_v1' and re.fullmatch(r'[0-9a-f]{64}',data.get('plan_id','')) is not None, 'strategy or plan')
+        hashes=data.get('input_hashes')
+        require(isinstance(hashes,dict) and set(hashes) == {'instruction_table','static_cfg','structure_candidates','transition_rules'} and all(re.fullmatch(r'[0-9a-f]{64}',x) for x in hashes.values()), 'input hashes')
+        require(isinstance(data.get('entries'),list) and isinstance(data.get('unresolved'),list), 'entries')
+        sources=set(); sites=set()
+        for entry in data['entries']:
+            require(isinstance(entry,dict) and offset(entry.get('source_block')) and entry.get('kind') in ('entry','single','conditional','return') and entry.get('status') in ('ready','unresolved') and isinstance(entry.get('targets'),list) and isinstance(entry.get('patches'),list) and isinstance(entry.get('audit'),dict) and isinstance(entry.get('evidence_refs'),list), 'entry')
+            require(entry['source_block'] not in sources, 'duplicate source'); sources.add(entry['source_block'])
+            require(all(offset(x) for x in entry['targets']), 'targets')
+            if entry['status'] == 'ready': require(entry['audit'].get('passed') is True and bool(entry['patches']), 'ready audit')
+            for patch in entry['patches']:
+                require(isinstance(patch,dict) and offset(patch.get('site')) and patch.get('kind') in ('b','b.cond') and offset(patch.get('target')) and re.fullmatch(r'[0-9a-f]{8}',patch.get('old_bytes','')) is not None and re.fullmatch(r'[0-9a-f]{8}',patch.get('new_bytes','')) is not None, 'patch')
+                require(patch['site'] not in sites, 'overlapping site'); sites.add(patch['site'])
+    elif kind == 'verification_report':
+        require(isinstance(data.get('function'),str) and all(re.fullmatch(r'[0-9a-f]{64}',data.get(k,'')) for k in ('plan_hash','original_sha256','patched_sha256')), 'identity')
+        require(data['original_sha256'] == binary_id and isinstance(data.get('patched_binary_path'),str), 'binary path')
+        require(isinstance(data.get('static_checks'),dict) and isinstance(data.get('rollback_ok'),bool) and isinstance(data.get('behavior'),dict), 'checks')
+        require(data.get('status') in ('passed','failed','not_run'), 'status')
     elif kind == 'rule_reviews':
         require(re.fullmatch(r'[0-9a-f]{64}',data.get('rules_hash','')) and isinstance(data.get('reviews'),list), 'review identity')
         from rule_review import validate_review
