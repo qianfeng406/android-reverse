@@ -5,7 +5,7 @@ from static_export import build_cfg
 
 NOP='1f2003d5'
 ALL={'x'+str(i) for i in range(31)} | {'nzcv','sp'}
-PURE={'mov','movk','csel'}
+PURE={'mov','movk','csel','mvn','and','lsr','mul'}
 KNOWN=PURE | {'add','sub','subs','cmp','tst','eor','asr','ldr','ldur','str','stur','b','ret','nop'}
 
 def reg(x):
