@@ -29,7 +29,7 @@ python deobfuscation-tool/cli.py infer --output deobfuscation-tool/work/experime
 python deobfuscation-tool/cli.py stage --output deobfuscation-tool/work/experiments/demo-d2-20261122/results --from-stage 4
 ```
 
-这些原始设备记录与生成产物保留在本机被 Git 忽略的 `work/` 中；仓库内回归测试使用可重建的小型夹具，干净克隆不依赖设备记录。
+这些原始设备记录与生成产物保留在本机被 Git 忽略的 `work/` 中；仓库内回归测试使用可重建的小型夹具，干净克隆不依赖设备记录即可运行**局部测试**。完整的 183 次来源观测与后续 D5/D6 纵向重放仍需这份设备采集，仓库当前未提供离线重放夹具。
 
 ## 3. 产物检查
 
