@@ -53,6 +53,15 @@ class FixturePlanTests(unittest.TestCase):
         self.assertEqual(len(p['entries']), 13)
         self.assertEqual(p['unresolved'], [])
 
+    def test_conditional_fallthrough_uses_early_branch(self):
+        p = self.plan(self.data)
+        entry = next(e for e in p['entries'] if e['source_block'] == '0x1760')
+        self.assertEqual([(x['site'], x['kind'], x['condition'], x['target'])
+                          for x in entry['patches']],
+                         [('0x1778', 'b.cond', 'ge', '0x17a4'),
+                          ('0x177c', 'b', None, '0x1780'),
+                          ('0x1780', 'b', None, '0x1784')])
+
     def test_rule_conflict_rejected(self):
         import copy
         d = copy.deepcopy(self.data)

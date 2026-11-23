@@ -52,3 +52,9 @@ Android runner 由 `android_runner.c` 使用 Kali 上 Android NDK r29 的 `aarch
 ## 2026-11-23 清理回归
 
 实验目录：[demo-cleanup-20261123](../work/experiments/demo-cleanup-20261123/)，设备差分和 CFG 数据见 [verification_report.json](../work/experiments/demo-cleanup-20261123/verification_report.json)；可单独查看[真实入口可达图](../work/experiments/demo-cleanup-20261123/reachable_cfg.dot)和[折叠展示图](../work/experiments/demo-cleanup-20261123/display_cfg.dot)。27 个输入全部一致，回滚校验通过。真实 CFG 全量块 46、入口可达块 18 均不变；可达非 NOP 指令 111→56，状态槽可达读取 0→0、写入 8→0。展示图折叠 NOP-only 节点，不能当作二进制真实 CFG；原位 NOP 不缩小 ELF 或符号。
+
+## 2026-11-23 手工表对照与条件分支位置
+
+[本地对照实验](../work/experiments/demo-manual-20261123/README.md)逐条执行此前的手工 patch 表，并与工具版比较。原表把 `0x1828`、`0x1850` 直接跳到 `0x1870`，漏掉了 `0x1854` 的业务右移；原表版仅 1/27 输入与原件一致。把两条目标修正为 `0x1854` 后为 27/27，但仍有 107 条可达非 NOP 指令和 8 处状态写入。
+
+D5 现对“条件真目标紧邻当前块”的已证明模式优先在 `CSEL` 处放置取反后的条件跳转，并将状态写入与旧分发器跳转改为指向下一指令的分支，后续清理成 NOP。新版修复库的入口可达 CFG 为 18 块、56 条非 NOP 指令、状态槽读写 0/0，设备 27/27 输入一致；展示图仍为 14 个节点。独立 `route_score` 样本也重跑 D5/D6，12/12 输入一致。该调整改变分支落点和指令布局，不会删除 ELF 中入口不可达的全部分发块。

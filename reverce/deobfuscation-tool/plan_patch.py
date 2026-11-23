@@ -11,6 +11,10 @@ from cleanup_analysis import analyze as analyze_cleanup
 from infer import canonical_slot, execute, inverse, slot, parts, val
 from probe import digest
 
+INVERTED_CONDITIONS = {'eq':'ne','ne':'eq','cs':'cc','hs':'lo','cc':'cs','lo':'hs',
+                       'mi':'pl','pl':'mi','vs':'vc','vc':'vs','hi':'ls','ls':'hi',
+                       'ge':'lt','lt':'ge','gt':'le','le':'gt'}
+
 
 def _reg(name):
     if re.fullmatch(r'[wx]\d+', name):
@@ -130,7 +134,15 @@ def plan_patches(binary_path, instruction_table, cfg, structure, transition_rule
                 condition = parts(csel['operands'])[-1]
                 guard, yes, no = state_value['args']
                 if [(a['guard_ast'], a['state_ast']) for a in alts] != [(guard,yes),(inverse(guard),no)]: raise ValueError('conditional_rule_mismatch')
-                specs = [(site, 'b.cond', condition, alts[0]['target_block']), (site+4, 'b', None, alts[1]['target_block'])]; kind = 'conditional'
+                if int(alts[0]['target_block'], 16) == site + 8:
+                    if condition not in INVERTED_CONDITIONS: raise ValueError('unsupported_conditional_inverse')
+                    specs = [(int(csel['module_offset'], 16), 'b.cond', INVERTED_CONDITIONS[condition], alts[1]['target_block']),
+                             (site, 'b', None, hex(site + 4)),
+                             (site + 4, 'b', None, alts[0]['target_block'])]
+                else:
+                    specs = [(site, 'b.cond', condition, alts[0]['target_block']),
+                             (site + 4, 'b', None, alts[1]['target_block'])]
+                kind = 'conditional'
             skipped = set(); changed = set(); aliases = {}
             for alt in alts:
                 path = alt.get('route_path', [])
@@ -238,26 +250,23 @@ def plan_patches(binary_path, instruction_table, cfg, structure, transition_rule
                     if e.get('in_function') and e['target'] in incoming:
                         incoming[e['target']].append(n)
             by_addr = {int(i['module_offset'], 16): i for i in simulated}
-            inverted = {'eq':'ne','ne':'eq','cs':'cc','hs':'lo','cc':'cs','lo':'hs',
-                        'mi':'pl','pl':'mi','vs':'vc','vc':'vs','hi':'ls','ls':'hi',
-                        'ge':'lt','lt':'ge','gt':'le','le':'gt'}
             for n in sorted(reachable, key=lambda x:int(x,16)):
                 block = blocks_by_start[n]; a = int(block['end_exclusive'],16)-4
                 first = by_addr[a]; second = by_addr.get(a+4)
                 cond = first['mnemonic'][2:] if first['mnemonic'].startswith('b.') else ''
-                if (cond not in inverted or not second or second['mnemonic'] != 'b'
+                if (cond not in INVERTED_CONDITIONS or not second or second['mnemonic'] != 'b'
                     or int(first['operands'].lstrip('#'),0) != a+8
                     or hex(a+4) not in reachable or incoming.get(hex(a+4)) != [n]
                     or int(blocks_by_start[hex(a+4)]['end_exclusive'],16) != a+8): continue
                 target = int(second['operands'].lstrip('#'),0)
                 try:
-                    encoded = encode_b_cond(a,target,inverted[cond])
+                    encoded = encode_b_cond(a,target,INVERTED_CONDITIONS[cond])
                 except ValueError as exc:
                     cleanup['unresolved'].append({'site':hex(a), 'reason':'trampoline_encode:'+str(exc)})
                     continue
                 cleanup['entries'].append({'site':hex(a), 'old_bytes':first['bytes'],
                     'new_bytes':encoded, 'kind':'invert_cond',
-                    'condition':inverted[cond], 'target':hex(target), 'paired_site':hex(a+4),
+                    'condition':INVERTED_CONDITIONS[cond], 'target':hex(target), 'paired_site':hex(a+4),
                     'reason':'conditional fallthrough is sole entry to one-instruction branch'})
                 cleanup['entries'].append({'site':hex(a+4), 'old_bytes':second['bytes'],
                     'new_bytes':'1f2003d5', 'kind':'trampoline_nop', 'paired_site':hex(a),
