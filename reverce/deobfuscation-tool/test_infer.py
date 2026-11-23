@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from copy import deepcopy
-from infer import infer_rules
+from infer import infer_rules, execute, proof_ready, val
 
 ROOT = Path(__file__).parent
 FIXTURE = ROOT / 'tests/fixtures/lesson_score'
@@ -40,6 +40,31 @@ class InferTests(unittest.TestCase):
                          {('0x81fc94e6','0x1804'),('0xe6e37d04','0x182c')})
         self.assertTrue(all(a['route_path'][0]=='0x18f8' and a['route_path'][-1]==a['target_block']
                             for a in rule['alternatives']))
+
+    def test_unknown_business_arithmetic_before_state_write(self):
+        for op, operands in [('mvn','w8, w8'), ('and','w8, w8, #0x1f'),
+                             ('lsr','w8, w8, w9'), ('mul','w8, w8, w9')]:
+            group = [{'module_offset':'0x1000','mnemonic':op,'operands':operands},
+                     {'module_offset':'0x1004','mnemonic':'str','operands':'w8, [sp, #0x20]'},
+                     {'module_offset':'0x1008','mnemonic':'mov','operands':'w8, #0x1234'},
+                     {'module_offset':'0x100c','mnemonic':'str','operands':'w8, [sp, #0x10]'},
+                     {'module_offset':'0x1010','mnemonic':'b','operands':'#0x2000'}]
+            with self.subTest(op=op):
+                _, write, branch = execute(group)
+                self.assertEqual((write[0], val(write[1]), branch[1]), ('sp+0x10',0x1234,'0x2000'))
+                self.assertIsNone(val({'op':'unknown','width':32}))
+
+    def test_unknown_arithmetic_cannot_prove_state_or_guard(self):
+        group = [{'module_offset':'0x1000','mnemonic':'and','operands':'w8, w8, #0x1f'},
+                 {'module_offset':'0x1004','mnemonic':'str','operands':'w8, [sp, #0x10]'}]
+        _, write, _ = execute(group)
+        self.assertIsNone(val(write[1]))
+        group = [{'module_offset':'0x1000','mnemonic':'mvn','operands':'w8, w8'},
+                 {'module_offset':'0x1004','mnemonic':'cmp','operands':'w8, #0'},
+                 {'module_offset':'0x1008','mnemonic':'csel','operands':'w9, w10, w11, eq'},
+                 {'module_offset':'0x100c','mnemonic':'str','operands':'w9, [sp, #0x10]'}]
+        _, write, _ = execute(group)
+        self.assertFalse(proof_ready(write[1]['args'][0]))
 
     def record(self, value, state, target):
         return {'id':'r','origin':{'source_block':'0x17e0'},

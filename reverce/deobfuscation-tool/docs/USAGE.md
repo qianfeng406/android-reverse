@@ -104,6 +104,8 @@ python deobfuscation-tool/cli.py infer --output deobfuscation-tool/work/lesson -
 
 首版只验证 demo 的共享回跳、栈状态槽、同块条件选择和比较链。间接 `BR/BLR`、跨块状态计算、多局部分发及递归目标函数会保持未解或采集报错。D3 采集的是原始位向量与执行路径，不记录函数参数和返回值；需结合 D1 结果判断测试输入覆盖。单次采集目前覆盖一个 PID，重新采集时用新 `--run-id` 和新 JSONL 路径；`import-probes` 会以本轮文件替换旧 D3 产物。
 
+D4 对 `MVN/AND/LSR/MUL` 的目标寄存器使用保守未知值，允许后续状态常量覆盖该值后继续证明转移；未知值若参与状态或条件仍输出未解。第二个样本的首轮阻塞、修复和设备验证见 [route_score 泛化测试](GENERALIZATION_ROUTE_SCORE.md)。
+
 可复现的设备验收、实际观测数量和局限见 [D3/D4 验收](D3_D4_ACCEPTANCE.md)。
 
 ## D5 补丁规划与 D6 验证
@@ -118,6 +120,8 @@ python deobfuscation-tool/cli.py stage --output path/to/results --from-stage 6
 ```
 
 `--patched-binary` 必须与原件是不同路径；补丁只写入新文件。D6 核对输入哈希、补丁旧字节、新分支的解码目标及撤销哈希，并在 `verification_report.json` 内保存修复指令表、CFG 与逐输入差分。`stage --from-stage 6` 只有报告为 `passed` 且修复文件哈希仍匹配时通过。
+
+若 D5 计划不完整，D6 的错误会列出未解来源数及首个来源和原因；完整清单在 `patch_plan.json`，对应的转移证明失败在 `unresolved_rules.json`。根据原因回到 D4 补指令语义或回到 D5 补安全审计，再重跑 D5/D6。
 
 D5 的 `cleanup` 子计划基于模拟边补丁后的可达 CFG，记录安全的跳板、状态栈槽死写入及纯寄存器死值清理；无法证明的清理项单独记录原因。D6 重新核查证明并应用计划。报告的 `reachable_graph` 是真实入口可达图，`display_graph` 仅折叠单入口 NOP 节点以便阅读。demo 实测见[D5/D6 验收](D5_D6_ACCEPTANCE.md)。
 

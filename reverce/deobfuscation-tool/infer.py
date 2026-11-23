@@ -65,6 +65,7 @@ def val(ast, inputs=None):
     op = ast['op']; width = ast['width']
     if op == 'const': return int(ast['hex'], 16)
     if op in ('load', 'reg'): return (inputs or {}).get(ast.get('location') or ast.get('name'))
+    if op not in ('and','eq','ne','slt','sge','sgt','sle','ult','uge','ugt','ule'): return None
     args = [val(x, inputs) for x in ast.get('args', [])]
     if any(x is None for x in args): return None
     a, b = args
@@ -121,8 +122,8 @@ def execute(group, initial_mem=None):
         elif op == 'csel':
             g = guard_for(p[3], flags)
             put(p[0],{'op':'ite','width':get(p[1])['width'],'args':[g,get(p[1]),get(p[2])], '_input':last_input})
-        elif op in ('add','sub','eor','asr'):
-            # Their values may feed business computation, but cannot prove a state.
+        elif op in ('add','sub','eor','asr','mvn','and','lsr','mul'):
+            # Keep business arithmetic; its result cannot prove a state or guard.
             put(p[0],{'op':'unknown','width':64 if p[0].startswith('x') else 32})
         elif op == 'b': branch = (None, hex(int(p[0].split()[0].lstrip('#'), 16)))
         elif op.startswith('b.'):

@@ -64,3 +64,11 @@ class TestApply(unittest.TestCase):
                 if mutate=='target': plan['entries'][0]['patches'][0]['target']='0x1608'
                 with self.subTest(mutate=mutate), self.assertRaises(ValueError): apply_plan(self.binary,plan,out,self.table,self.cfg,self.structure)
                 self.assertFalse(out.exists())
+    def test_incomplete_plan_reports_upstream_source(self):
+        import copy, tempfile
+        from pathlib import Path
+        from apply_verify import apply_plan
+        plan=copy.deepcopy(self.plan)
+        plan['unresolved']=[{'source_block':'0x1964','reason':'unsupported_instruction:0x1968:mvn'}]
+        with tempfile.TemporaryDirectory() as d, self.assertRaisesRegex(ValueError, 'first 0x1964: unsupported_instruction:0x1968:mvn'):
+            apply_plan(self.binary,plan,Path(d)/'patched.so',self.table,self.cfg,self.structure)

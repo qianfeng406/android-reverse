@@ -13,7 +13,14 @@ def apply_plan(binary_path, plan, output_path, instruction_table, cfg, structure
     original = Path(binary_path).read_bytes(); original_hash = sha(original)
     if Path(binary_path).resolve() == Path(output_path).resolve(): raise ValueError('output must differ from original')
     if plan.get('binary_id') != original_hash: raise ValueError('binary hash mismatch')
-    if plan.get('strategy') != 'arm64_direct_edges_v1' or plan.get('unresolved') or not plan.get('entries'): raise ValueError('incomplete plan')
+    if plan.get('strategy') != 'arm64_direct_edges_v1': raise ValueError('unsupported patch strategy')
+    if plan.get('unresolved'):
+        issues = plan['unresolved']
+        sources = {x.get('source_block') for x in issues if x.get('source_block')}
+        first = issues[0]
+        raise ValueError('incomplete plan: %d unresolved source(s); first %s: %s; inspect patch_plan.json and unresolved_rules.json, then rerun D4/D5' %
+                         (len(sources), first.get('source_block', 'unknown'), first.get('reason', 'unknown')))
+    if not plan.get('entries'): raise ValueError('incomplete plan: no ready patch entries')
     for k, obj in [('instruction_table',instruction_table),('static_cfg',cfg),('structure_candidates',structure)]:
         if plan.get('input_hashes',{}).get(k) != digest(obj): raise ValueError('input hash mismatch: '+k)
     if any(x.get('status') != 'ready' or not x.get('audit',{}).get('passed') for x in plan['entries']): raise ValueError('entry not ready')
